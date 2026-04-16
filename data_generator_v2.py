@@ -1,30 +1,24 @@
-"""
-data_generator_v2.py
-No-Code SLM Studio — Teacher Model Pipeline
-Fixes: chunking, volume, retry logic, progress tracking
-"""
-
 import os
 import json
 import time
 from pypdf import PdfReader
-from google import genai
-from google.genai import types
+from groq import Groq  # <-- Switched from google.genai
 from dotenv import load_dotenv
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
 
 load_dotenv()
-api_key = os.getenv("GOOGLE_API_KEY")
+# The variable name in your .env should now be GROQ_API_KEY
+api_key = os.getenv("GROQ_API_KEY") 
 if not api_key:
-    raise RuntimeError("GOOGLE_API_KEY not set in .env file")
+    raise RuntimeError("GROQ_API_KEY not set in .env file")
 
-PDF_PATH       = "data.pdf"
-OUTPUT_FILE    = "train.jsonl"
-CHUNK_SIZE     = 6000   # characters per chunk (~1500 tokens) — safe for Gemini
-CHUNK_OVERLAP  = 500    # overlap so context isn't lost at boundaries
-PAIRS_PER_CHUNK = 15    # Q&A pairs to generate per chunk
-MAX_CHUNKS     = 20     # cap at 20 chunks = 300 pairs max (more than enough)
+PDF_PATH        = "data.pdf"
+OUTPUT_FILE     = "train.jsonl"
+CHUNK_SIZE      = 6000   
+CHUNK_OVERLAP   = 500    
+PAIRS_PER_CHUNK = 15     
+MAX_CHUNKS      = 20     
 
 # ─── PDF EXTRACTION ──────────────────────────────────────────────────────────
 
@@ -38,117 +32,104 @@ def extract_pdf_text(filepath: str) -> str:
 # ─── CHUNKING ────────────────────────────────────────────────────────────────
 
 def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
-    """Split text into overlapping chunks. Never truncates — processes everything."""
     chunks = []
     start = 0
     while start < len(text):
         end = start + chunk_size
         chunks.append(text[start:end])
-        start += chunk_size - overlap  # slide forward with overlap
-    print(f"📦 Split into {len(chunks)} chunks ({chunk_size} chars each, {overlap} overlap).")
+        start += chunk_size - overlap
+    print(f"📦 Split into {len(chunks)} chunks.")
     return chunks
 
 # ─── TEACHER PROMPT ──────────────────────────────────────────────────────────
 
 SYSTEM_INSTRUCTION = """
-You are an SLM Training Expert. Your job is to generate high-quality fine-tuning
-data from a document chunk. Generate exactly {n} training examples.
+You are an SLM Training Expert. Generate exactly {n} training examples from the provided text.
+Return the output as a JSON array of objects with "instruction" and "output" keys.
 
 REQUIRED MIX:
-- 60% FACTUAL: Direct questions with answers grounded strictly in the text.
-- 20% REFUSAL: Questions about things NOT in the text.
-  Response MUST be exactly: "This information is not available in the provided document."
-- 20% BOUNDARY: Slightly off-topic questions. Response redirects back to what IS available.
-
-STRICT RULES:
-- Never fabricate facts. If it's not in the text, refuse.
-- Answers must be concise and direct — no "Based on the text..." preambles.
-- Questions must sound like what a real user would actually ask.
-- Vary question phrasing: What, How, Why, Explain, List, Compare.
+- 60% FACTUAL: Direct questions grounded in text.
+- 20% REFUSAL: Questions about things NOT in text. Response: "This information is not available in the provided document."
+- 20% BOUNDARY: Slightly off-topic, redirect back.
 """
 
-# ─── GEMINI CALL WITH RETRY ──────────────────────────────────────────────────
+# ─── GROQ CALL WITH RETRY ───────────────────────────────────────────────────
 
-client = genai.Client(api_key=api_key)
+client = Groq(api_key=api_key)
 
 def generate_pairs_from_chunk(chunk: str, chunk_index: int, retries: int = 3) -> list[dict]:
-    """Call Gemini on a single chunk. Retries on failure."""
-    prompt = SYSTEM_INSTRUCTION.format(n=PAIRS_PER_CHUNK) + f"\n\nDOCUMENT CHUNK:\n{chunk}"
+    """Call Groq Llama 3 on a single chunk."""
+    prompt = f"DOCUMENT CHUNK:\n{chunk}"
 
     for attempt in range(retries):
         try:
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",  # Flash is free tier, fast, and sufficient
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema={
-                        "type": "ARRAY",
-                        "items": {
-                            "type": "OBJECT",
-                            "properties": {
-                                "instruction": {"type": "STRING"},
-                                "output": {"type": "STRING"}
-                            },
-                            "required": ["instruction", "output"]
-                        }
-                    }
-                )
+            # Using llama-3.3-70b for high-quality data generation
+            response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": SYSTEM_INSTRUCTION.format(n=PAIRS_PER_CHUNK)},
+                    {"role": "user", "content": prompt}
+                ],
+                # Groq uses response_format for JSON mode
+                response_format={"type": "json_object"}
             )
-            pairs = json.loads(response.text)
+            
+            # Groq returns a string in content; we parse it to a list
+            raw_content = response.choices[0].message.content
+            data = json.loads(raw_content)
+            
+            # Handle cases where the model wraps the list in a key like {"examples": [...]}
+            if isinstance(data, dict):
+                for val in data.values():
+                    if isinstance(val, list):
+                        pairs = val
+                        break
+            else:
+                pairs = data
+
             print(f"  Chunk {chunk_index+1}: generated {len(pairs)} pairs.")
             return pairs
 
         except Exception as e:
-            wait = 2 ** attempt  # exponential backoff: 1s, 2s, 4s
-            print(f"  ⚠️  Chunk {chunk_index+1} attempt {attempt+1} failed: {e}. Retrying in {wait}s...")
+            wait = 2 ** (attempt + 1)
+            print(f"  ⚠️ Attempt {attempt+1} failed: {e}. Retrying in {wait}s...")
             time.sleep(wait)
 
-    print(f"  ❌ Chunk {chunk_index+1} failed after {retries} attempts. Skipping.")
     return []
 
 # ─── MAIN PIPELINE ───────────────────────────────────────────────────────────
 
 def run_pipeline():
-    # Step 1: Extract
     raw_text = extract_pdf_text(PDF_PATH)
+    chunks = chunk_text(raw_text, CHUNK_SIZE, CHUNK_OVERLAP)[:MAX_CHUNKS]
+    
+    print(f"🎯 Processing {len(chunks)} chunks via Groq (Llama 3)...\n")
 
-    # Step 2: Chunk — process the WHOLE document, not just first 40k chars
-    chunks = chunk_text(raw_text, CHUNK_SIZE, CHUNK_OVERLAP)
-    chunks = chunks[:MAX_CHUNKS]  # cap total if document is enormous
-    print(f"🎯 Processing {len(chunks)} chunks → target ~{len(chunks) * PAIRS_PER_CHUNK} pairs.\n")
-
-    # Step 3: Generate pairs from each chunk
     all_pairs = []
     for i, chunk in enumerate(chunks):
         pairs = generate_pairs_from_chunk(chunk, i)
         all_pairs.extend(pairs)
-        time.sleep(1)  # respect Gemini free tier rate limit (15 req/min)
+        # Groq is fast, but let's keep a tiny sleep to be safe with rate limits
+        time.sleep(0.5) 
 
-    # Step 4: Deduplicate by instruction text
+    # Deduplicate
     seen = set()
     unique_pairs = []
     for pair in all_pairs:
-        key = pair["instruction"].strip().lower()
-        if key not in seen:
-            seen.add(key)
-            unique_pairs.append(pair)
+        # Safety check for malformed pairs
+        if "instruction" in pair and "output" in pair:
+            key = pair["instruction"].strip().lower()
+            if key not in seen:
+                seen.add(key)
+                unique_pairs.append(pair)
 
-    # Step 5: Save as JSONL
+    # Save
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         for entry in unique_pairs:
             json.dump(entry, f, ensure_ascii=False)
             f.write("\n")
 
-    print(f"\n✅ DONE. Saved {len(unique_pairs)} unique training pairs to '{OUTPUT_FILE}'.")
-    print(f"   (Removed {len(all_pairs) - len(unique_pairs)} duplicates.)")
-
-    # Step 6: Quick sanity check — print 3 examples
-    print("\n── Sample examples ──────────────────────────────────")
-    for pair in unique_pairs[:3]:
-        print(f"Q: {pair['instruction']}")
-        print(f"A: {pair['output'][:120]}...")
-        print()
+    print(f"\n✅ DONE. Saved {len(unique_pairs)} training pairs to '{OUTPUT_FILE}'.")
 
 if __name__ == "__main__":
     run_pipeline()

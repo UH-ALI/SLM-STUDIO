@@ -1,0 +1,64 @@
+(.wsl_venv) ms-fyp@DESKTOP-9JV90RI:~/FYP$ python3 rag_inference.py 
+🦥 Unsloth: Will patch your computer to enable 2x faster free finetuning.
+Unsloth: Your Flash Attention 2 installation seems to be broken. Using Xformers instead. No performance changes will be seen.
+🦥 Unsloth Zoo will now patch everything to make training faster!
+
+⏳ Loading fine-tuned model (business)...
+==((====))==  Unsloth 2026.4.5: Fast Qwen2 patching. Transformers: 5.5.0.
+   \\   /|    NVIDIA GeForce RTX 5060. Num GPUs = 1. Max memory: 7.96 GB. Platform: Linux.
+O^O/ \_/ \    Torch: 2.10.0+cu128. CUDA: 12.0. CUDA Toolkit: 12.8. Triton: 3.6.0
+\        /    Bfloat16 = TRUE. FA [Xformers = None. FA2 = False]
+ "-____-"     Free license: http://github.com/unslothai/unsloth
+Unsloth: Fast downloading is enabled - ignore downloading bars which are red colored!
+Loading weights: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 338/338 [00:00<00:00, 403.76it/s]
+unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit does not have a padding token! Will use pad_token = <|PAD_TOKEN|>.
+Unsloth 2026.4.5 patched 28 layers with 0 QKV layers, 0 O layers and 0 MLP layers.
+✅ Model loaded.
+
+🤖 No-Code SLM Studio — Business Assistant
+   Type your question. Type 'quit' to exit.
+
+You: who is vc of dsu?
+Loading weights: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 103/103 [00:00<00:00, 1297.56it/s]
+BertModel LOAD REPORT from: sentence-transformers/all-MiniLM-L6-v2
+Key                     | Status     | Details
+------------------------+------------+--------
+embeddings.position_ids | UNEXPECTED |        
+
+Notes:
+- UNEXPECTED:   can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+Traceback (most recent call last):
+  File "/home/ms-fyp/FYP/rag_inference.py", line 197, in <module>
+    chat_loop(model, tokenizer)
+  File "/home/ms-fyp/FYP/rag_inference.py", line 180, in chat_loop
+    answer = answer_question(model, tokenizer, question)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ms-fyp/FYP/rag_inference.py", line 141, in answer_question
+    context = retrieve_context(question)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ms-fyp/FYP/rag_inference.py", line 101, in retrieve_context
+    collection = client.get_collection(COLLECTION)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ms-fyp/FYP/.wsl_venv/lib/python3.12/site-packages/chromadb/api/client.py", line 260, in get_collection
+    model = self._server.get_collection(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ms-fyp/FYP/.wsl_venv/lib/python3.12/site-packages/chromadb/api/rust.py", line 272, in get_collection
+    collection = self.bindings.get_collection(name, tenant, database)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+chromadb.errors.NotFoundError: Collection [docs_business] does not exist
+(.wsl_venv) ms-fyp@DESKTOP-9JV90RI:~/FYP$ sqlite3 /home/ms-fyp/FYP/chroma_business/chroma.sqlite3
+SQLite version 3.45.1 2024-01-30 16:01:20
+Enter ".help" for usage hints.
+sqlite> .tables
+acquire_write                      embedding_metadata_array         
+collection_metadata                embeddings                       
+collections                        embeddings_queue                 
+databases                          embeddings_queue_config          
+embedding_fulltext_search          maintenance_log                  
+embedding_fulltext_search_config   max_seq_id                       
+embedding_fulltext_search_content  migrations                       
+embedding_fulltext_search_data     segment_metadata                 
+embedding_fulltext_search_docsize  segments                         
+embedding_fulltext_search_idx      tenants                          
+embedding_metadata               
+sqlite> 

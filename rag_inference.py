@@ -28,7 +28,6 @@ def build_vector_store():
     """Extract PDF, chunk it, embed it, store in ChromaDB. Run once."""
     import chromadb
     from pypdf import PdfReader
-    from sentence_transformers import SentenceTransformer
 
     print("📚 Building vector store from PDF...")
 
@@ -46,7 +45,7 @@ def build_vector_store():
     print(f"   Created {len(chunks)} chunks.")
 
     # Embed — MiniLM runs on CPU, no GPU needed
-    embedder = SentenceTransformer("all-MiniLM-L6-v2")
+    embedder = get_embedder()
     embeddings = embedder.encode(chunks, show_progress_bar=True, batch_size=64)
 
     # Store in ChromaDB
@@ -94,9 +93,8 @@ def load_finetuned_model():
 def retrieve_context(query: str, top_k: int = TOP_K) -> str:
     """Retrieve the most relevant chunks from ChromaDB for a given query."""
     import chromadb
-    from sentence_transformers import SentenceTransformer
 
-    embedder = SentenceTransformer("all-MiniLM-L6-v2")
+    embedder = get_embedder()
     query_embedding = embedder.encode([query])[0].tolist()
 
     client = chromadb.PersistentClient(path=CHROMA_DIR)
@@ -125,6 +123,16 @@ QUESTION:
 {question}
 
 ANSWER:"""
+
+# Cached embedder — loaded once, reused for every query
+_embedder = None
+
+def get_embedder():
+    global _embedder
+    if _embedder is None:
+        from sentence_transformers import SentenceTransformer
+        _embedder = SentenceTransformer("all-MiniLM-L6-v2")
+    return _embedder
 
 def answer_question(model, tokenizer, question: str) -> str:
     """Retrieve context and generate an answer using the fine-tuned model."""
@@ -180,6 +188,10 @@ if __name__ == "__main__":
     # Pass --build flag to (re)build vector store from PDF
     if "--build" in sys.argv:
         build_vector_store()
+    elif not os.path.exists(CHROMA_DIR):
+        print(f"⚠️  Vector store not found at '{CHROMA_DIR}'. Run with --build first.")
+        print("   Example: python rag_inference.py --build")
+        sys.exit(1)
 
     model, tokenizer = load_finetuned_model()
     chat_loop(model, tokenizer)

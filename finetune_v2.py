@@ -3,13 +3,13 @@ finetune_v2.py
 No-Code SLM Studio — QLoRA Fine-Tuning Pipeline
 Fixes: epoch-based training, model saving, inference test, VRAM monitoring
 """
-
+import unsloth
 import torch
 import json
 import os
 from datasets import load_dataset
-from trl import SFTTrainer
-from transformers import TrainingArguments, TextStreamer
+from trl import SFTTrainer, SFTConfig
+from transformers import TextStreamer
 
 # ─── MODEL SELECTION ─────────────────────────────────────────────────────────
 # Uncomment the model that matches your use case.
@@ -115,11 +115,11 @@ def train(model, tokenizer, dataset):
         model=model,
         tokenizer=tokenizer,
         train_dataset=dataset,
-        dataset_text_field="text",
-        max_seq_length=MAX_SEQ_LEN,
-        dataset_num_proc=2,
-        packing=False,
-        args=TrainingArguments(
+        args=SFTConfig(
+            dataset_text_field="text",
+            max_seq_length=MAX_SEQ_LEN,
+            dataset_num_proc=2,
+            packing=False,
             num_train_epochs=EPOCHS,          # epoch-based, not step-based
             per_device_train_batch_size=BATCH_SIZE,
             gradient_accumulation_steps=GRAD_ACC,
@@ -156,7 +156,12 @@ def save_adapter(model, tokenizer):
     model.save_pretrained(adapter_path)
     tokenizer.save_pretrained(adapter_path)
     print(f"💾 Adapter saved to: {adapter_path}")
-    print(f"   Size: {sum(os.path.getsize(os.path.join(adapter_path, f)) for f in os.listdir(adapter_path)) / 1e6:.1f} MB")
+    total_size = sum(
+        os.path.getsize(os.path.join(root, f))
+        for root, _, files in os.walk(adapter_path)
+        for f in files
+    )
+    print(f"   Size: {total_size / 1e6:.1f} MB")
 
 # ─── INFERENCE TEST ──────────────────────────────────────────────────────────
 
