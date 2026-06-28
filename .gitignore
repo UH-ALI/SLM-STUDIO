@@ -1,0 +1,37 @@
+# 1. Security (Crucial!)
+.env
+.env.local
+
+*.zip
+
+# 2. Python System Files (Junk)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.Zone.Identifier
+*.egg-info/
+
+# 3. Virtual Environment (Heavy folders)
+venv/
+env/
+.venv/
+
+# 4. User Data & Storage (Don't upload Word docs/PDFs)
+uploaded_files/
+downloads/
+temp/
+data/
+unsloth_compiled_cache/
+
+# 5. Database Files (If you are using SQLite locally)
+*.db
+*.sqlite3
+
+# 6. IDE Settings (VS Code settings specific to your laptop)
+.vscode/
+.idea/
+
+# 7. Celery/Redis temporary files (From your worker folder)
+celerybeat-schedule
+dump.rdb

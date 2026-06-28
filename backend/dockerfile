@@ -1,0 +1,55 @@
+# =============================================================================
+# SLM STUDIO — DOCKERFILE
+# =============================================================================
+# One image serves both services — same codebase, different startup commands:
+#   API    → uvicorn (default CMD below)
+#   Worker → celery  (overridden in docker-compose.yml)
+# =============================================================================
+
+FROM python:3.12-slim
+
+# -----------------------------------------------------------------------------
+# SYSTEM LIBRARIES
+# build-essential + gcc + g++ → KEPT permanently — Triton compiles CUDA kernels
+#                               at runtime during fine-tuning and needs gcc.
+#                               Never remove these after pip install.
+# libpq-dev                   → psycopg2-binary (PostgreSQL driver)
+# libgl1                      → PyMuPDF (PDF reading) — renamed from libgl1-mesa-glx
+#                               in Debian trixie (python:3.12-slim base)
+# libglib2.0-0                → chromadb / hnswlib (vector store C++ bindings)
+# libgomp1                    → PyTorch OpenMP (parallel CPU tensor operations)
+# curl                        → Docker healthcheck command
+# -----------------------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    g++ \
+    libpq-dev \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv — fast Python package installer
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+WORKDIR /app
+
+# Copy requirements FIRST — Docker caches this layer.
+# pip install only reruns when requirements.txt changes, not on every code edit.
+COPY requirements.txt .
+
+# Install all Python dependencies using uv with BuildKit cache
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system -r requirements.txt
+
+# Copy source code AFTER installing dependencies
+COPY . .
+
+# Pre-create data directories your app writes to at runtime
+RUN mkdir -p data/raw data/processed data/vector_stores data/adapters
+
+# Default command — API server.
+# The worker service in docker-compose.yml overrides this with the celery command.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
