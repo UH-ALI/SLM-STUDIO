@@ -136,6 +136,13 @@ def process_and_ingest_document(project_id: str, dataset_id: str, file_path: str
     try:
         if path.suffix.lower() == ".pdf":
             md_text = pymupdf4llm.to_markdown(str(path))
+            word_count = len(md_text.split())
+            if word_count < 80:
+                raise ValueError(
+                    f"'{path.name}' appears to be a scanned/image-only PDF "
+                    f"(extracted only {word_count} words). "
+                    "Please upload a text-layer PDF or convert it to DOCX first."
+                )
         else:
             md = MarkItDown()
             result = md.convert(str(path))
@@ -147,7 +154,9 @@ def process_and_ingest_document(project_id: str, dataset_id: str, file_path: str
     chunk_tuples = hybrid_chunk_markdown(md_text)
     usable_chunks = [
         (text, chapter) for text, chapter in chunk_tuples
-        if len(text) > 80 and not is_reference_chunk(text)
+        if len(text) > 120
+        and not is_reference_chunk(text)
+        and (sum(c.isalpha() for c in text) / len(text)) > 0.40
     ]
 
     docs, metadatas, ids = [], [], []
@@ -167,7 +176,7 @@ def process_and_ingest_document(project_id: str, dataset_id: str, file_path: str
 
     # 3. Vectorization & Storage
     print(f"Embedding {len(docs)} chunks for Dataset {dataset_id}")
-    embedder = SentenceTransformer("all-MiniLM-L6-v2")
+    embedder = SentenceTransformer("BAAI/bge-small-en-v1.5")
     embeddings = embedder.encode(docs, show_progress_bar=False, batch_size=64)
 
     # [PROJECT REFACTOR] Use project-scoped collection naming
@@ -192,5 +201,11 @@ def process_and_ingest_document(project_id: str, dataset_id: str, file_path: str
         metadatas=metadatas,
         ids=ids
     )
+
+    MAX_CHUNKS_PER_PROJECT = 2500  # ~350-500 pages of dense text
+    total = collection.count()
+    if total > MAX_CHUNKS_PER_PROJECT:
+        print(f"⚠️  Project has {total} chunks. Consider splitting into multiple projects.")
+
     print(f"Vector store ready — {len(docs)} chunks saved to {chroma_dir}.")
     return True

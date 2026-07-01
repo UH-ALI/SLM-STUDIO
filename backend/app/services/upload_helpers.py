@@ -22,7 +22,7 @@ from app import models
 
 # ─── UNIVERSAL LIMITS (apply to all formats) ────────────────────────────────
 MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB — PDF, DOCX, TXT, CSV
-MAX_PDF_PAGES = 500                 # Only PDFs have a meaningful page count
+
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".csv"}
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -65,14 +65,7 @@ def save_file(file: UploadFile, file_location: str) -> None:
 def _validate_pdf(file_location: str, filename: str) -> None:
     try:
         doc = fitz.open(file_location)
-        page_count = len(doc)
         doc.close()
-        if page_count > MAX_PDF_PAGES:
-            os.remove(file_location)
-            raise HTTPException(
-                status_code=413,
-                detail=f"PDF '{filename}' too long. Max pages: {MAX_PDF_PAGES}. Your file has {page_count} pages.",
-            )
     except HTTPException:
         raise
     except Exception as e:

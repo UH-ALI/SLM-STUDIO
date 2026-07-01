@@ -19,27 +19,25 @@ warnings.filterwarnings("ignore", message=".*max_new_tokens.*max_length.*")
 
 MODEL_CONFIGS = {
     # Lightweight — fastest inference, lowest VRAM
-    "general":      "unsloth/Llama-3.2-1B-Instruct-bnb-4bit",      # ~2.5 GB
+    "general":      "unsloth/Qwen3-1.7B-bnb-4bit",
    
     # Standard — balanced quality/speed  
-    "education":    "unsloth/Llama-3.2-1B-Instruct-bnb-4bit",      # ~2.5 GB
-    "business":     "unsloth/Llama-3.2-1B-Instruct-bnb-4bit",      # ~2.5 GB
+    "education":    "unsloth/Qwen3-1.7B-bnb-4bit",
+    "business":     "unsloth/Qwen3-4B-bnb-4bit",
    
     # Reasoning-heavy — need stronger logical capabilities
-    "finance":      "unsloth/gemma-2-2b-it-bnb-4bit",              # ~3.5 GB
-    "legal":        "unsloth/gemma-2-2b-it-bnb-4bit",              # ~3.5 GB
+    "finance":      "unsloth/Qwen3-4B-bnb-4bit",
+    "legal":        "unsloth/Qwen3-4B-bnb-4bit",
    
     # Precision-critical — medical needs highest accuracy
-    "medical":      "unsloth/Phi-3-mini-4k-instruct-bnb-4bit",     # ~3 GB
+    "medical":      "unsloth/Phi-3.5-mini-instruct-bnb-4bit",
 }
 
 # ─── BASE MODEL ALIASES (frontend-facing names → real HF model IDs) ─────────
-# Keep this in sync with the frontend's model selector component.
-# Last updated: 2026-06-20
 BASE_MODEL_ALIASES = {
-    "llama-3.2-1b": "unsloth/Llama-3.2-1B-Instruct-bnb-4bit",
-    "gemma-2-2b": "unsloth/gemma-2-2b-it-bnb-4bit",
-    "phi-3-mini": "unsloth/Phi-3-mini-4k-instruct-bnb-4bit",
+    "qwen3-1.7b": "unsloth/Qwen3-1.7B-bnb-4bit",
+    "qwen3-4b": "unsloth/Qwen3-4B-bnb-4bit",
+    "phi-3.5-mini": "unsloth/Phi-3.5-mini-instruct-bnb-4bit",
 }
 
 MAX_SEQ_LEN   = 2048
@@ -130,11 +128,16 @@ def run_finetuning_pipeline(job_id: str, use_case: str, hyperparameters: dict = 
         token=settings.HF_TOKEN,
     )
 
+    lora_r = 32 if use_case_lower in ("finance", "legal", "medical") else 16
+
     model = FastLanguageModel.get_peft_model(
         model,
-        r=16,
-        target_modules=["q_proj", "v_proj"],
-        lora_alpha=32,
+        r=lora_r,
+        target_modules=[
+            "q_proj", "k_proj", "v_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj",
+        ],
+        lora_alpha=lora_r * 2,
         lora_dropout=0.05,
         bias="none",
         use_gradient_checkpointing="unsloth",
@@ -195,6 +198,8 @@ def run_finetuning_pipeline(job_id: str, use_case: str, hyperparameters: dict = 
         logging_steps=5,
         save_strategy="epoch",
         eval_strategy="epoch",          # ← evaluate at each epoch
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
         optim="adamw_8bit",
         weight_decay=0.01,
         lr_scheduler_type="cosine",

@@ -20,10 +20,10 @@ transformers.logging.set_verbosity_error()
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
-TOP_K               = 3
-MAX_NEW_TOKENS      = 256
+TOP_K               = 5
+MAX_NEW_TOKENS      = 512
 MAX_SEQ_LEN         = 4096
-RELEVANCE_THRESHOLD = 0.85
+RELEVANCE_THRESHOLD = 0.45
 
 # ─── CACHE LIMITS (H2) ─────────────────────────────────────────────────────────
 MAX_CACHED_MODELS      = 3
@@ -40,7 +40,7 @@ def get_embedder():
     global _embedder
     if _embedder is None:
         logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
-        _embedder = SentenceTransformer("all-MiniLM-L6-v2")
+        _embedder = SentenceTransformer("BAAI/bge-small-en-v1.5")
     return _embedder
 
 
@@ -307,9 +307,11 @@ def generate_rag_response(
             input_ids=input_ids,
             attention_mask=attention_mask,
             max_new_tokens=actual_new_tokens,
-            # [TEMPERATURE FIX] Use dynamic temperature instead of hardcoded 0.3
-            temperature=temperature,
-            do_sample=True,
+            temperature=temperature if temperature > 0.05 else None,
+            do_sample=temperature > 0.05,
+            top_p=0.9,
+            repetition_penalty=1.15,
+            no_repeat_ngram_size=4,
             pad_token_id=tokenizer.eos_token_id,
         )
 
@@ -407,9 +409,11 @@ def generate_rag_response_stream(
         "input_ids": input_ids,
         "attention_mask": attention_mask,
         "max_new_tokens": actual_new_tokens,
-        # [TEMPERATURE FIX] Use dynamic temperature instead of hardcoded 0.3
-        "temperature": temperature,
-        "do_sample": True,
+        "temperature": temperature if temperature > 0.05 else None,
+        "do_sample": temperature > 0.05,
+        "top_p": 0.9,
+        "repetition_penalty": 1.15,
+        "no_repeat_ngram_size": 4,
         "pad_token_id": tokenizer.eos_token_id,
         "streamer": streamer,
     }

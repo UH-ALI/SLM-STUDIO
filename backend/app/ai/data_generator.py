@@ -171,7 +171,9 @@ def _is_grounded(chunk: str, output: str) -> bool:
     return (overlap / len(output_words)) > 0.40 and overlap >= 2
 
 def dynamic_pair_count(chunk: str) -> int:
-    return max(1, min(8, len(chunk.split()) // 60))
+    words = len(chunk.split())
+    base  = max(2, min(10, words // 50))
+    return base
 
 def assemble_final_persona(user_input: str = None) -> str:
     """Wraps the user's custom persona in the AI team's strict guardrails."""
@@ -315,7 +317,11 @@ def generate_finetuning_data(
         raise ValueError(f"No documents found in vector store docs_{project_id}")
 
     # 2. Dynamic Sampling (AI Team Logic)
-    valid_chunks = [chunk for chunk in all_chunks if len(chunk.split()) >= 100]
+    valid_chunks = [
+        chunk for chunk in all_chunks
+        if len(chunk.split()) >= 100
+        and (sum(c.isalpha() for c in chunk) / max(len(chunk), 1)) > 0.40
+    ]
     target_chunks = max(50, min(250, int(len(valid_chunks) * 0.25)))
 
     if len(valid_chunks) > target_chunks:
