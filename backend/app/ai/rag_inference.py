@@ -201,22 +201,14 @@ def retrieve_context(project_id: str, query: str):
 
 # ─── PROMPTS (M7: XML Delimiter Architecture) ───────────────────────────────
 def build_system_prompt(persona: str, style_directive: str) -> str:
-    content = (
+    return (
         f"{persona}\n\n"
-        "OPERATIONAL DIRECTIVES:\n"
-        "1. PERSONA ADHERENCE: You must fully embody the requested persona in every word. Maintain the requested voice, tone, and perspective throughout your entire response.\n"
-        "2. ABSOLUTE GROUNDING: Your answers must be derived EXCLUSIVELY from the provided CONTEXT. You are strictly forbidden from using outside knowledge.\n"
-        "3. CONTAINMENT & DENIAL: If the CONTEXT does not contain the specific information needed to answer the question, do not guess or extrapolate. You must output verbatim:\n"
-        '   "This information is not available in the provided document."\n'
-        "4. CLARITY & SYNTHESIS: Explain concepts using clear, accessible wording. Synthesize the data in your own voice rather than copy-pasting raw text.\n"
-        "5. STRICT CITATION RULES:\n"
-        "   - YOU MUST append the exact `[Source: ...]` label provided in the context blocks to the facts you state.\n"
-        "   - YOU MUST NOT output any pre-existing academic citations, reference numbers, or footnotes (e.g., [1], (Author, 2019)) that are embedded inside the raw document text.\n"
-        "6. ANALYTICAL: Never restate the question as your answer. Explain the specific mechanism, cause, or consequence.\n\n"
-        f"DOMAIN RESPONSE STYLE:\n{style_directive}\n"
+        "DIRECTIVES:\n"
+        "1. You must answer the user's query based ONLY on the provided context.\n"
+        '2. If the context does not contain the answer, reply EXACTLY with: "This information is not available in the provided document."\n'
+        "3. Append [Source: ...] to the facts you synthesize based on the context.\n\n"
+        f"STYLE:\n{style_directive}"
     )
-    return f"<system>\n{content}</system>"
-
 
 RAG_USER_TEMPLATE = (
     "<context>\n"
@@ -224,15 +216,7 @@ RAG_USER_TEMPLATE = (
     "</context>\n\n"
     "<query>\n"
     "{question}\n"
-    "</query>\n\n"
-    "<instruction>\n"
-    "STRICT DIRECTIVE: You are operating in an enclosed RAG environment. "
-    "Your response must be formulated EXCLUSIVELY from the data within the CONTEXT block above. "
-    'If the data is insufficient, output exactly: "This information is not available in the provided document."\n\n'
-    "FINAL CITATION RULES:\n"
-    "- DO NOT output any pre-existing academic reference numbers or footnotes found inside the raw text (e.g., [1], (Author, 2020)).\n"
-    "- YOU MUST explicitly append the injected `[Source: ...]` label to the facts you synthesize.\n"
-    "</instruction>"
+    "</query>"
 )
 
 
@@ -261,7 +245,7 @@ def generate_rag_response(
     )
     # [BUG #20 FIX] Inject directive inside </system>
     if introduced:
-        active_system = system_prompt.replace("</system>", f"{no_intro_directive}\n</system>")
+        active_system = system_prompt + f"\n{no_intro_directive}"
     else:
         active_system = system_prompt
 
@@ -362,7 +346,7 @@ def generate_rag_response_stream(
     )
     # [BUG #20 FIX] Inject directive inside </system>
     if introduced:
-        active_system = system_prompt.replace("</system>", f"{no_intro_directive}\n</system>")
+        active_system = system_prompt + f"\n{no_intro_directive}"
     else:
         active_system = system_prompt
 

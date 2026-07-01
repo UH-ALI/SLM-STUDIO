@@ -11,6 +11,7 @@ import { Button } from '@/components/atoms/Button';
 interface WizardUploadProps {
   files: File[];
   textInput: string;
+  isSubmitting?: boolean;
   onFilesChange: (files: File[]) => void;
   onTextChange: (text: string) => void;
   onContinue: () => void;
@@ -20,6 +21,7 @@ interface WizardUploadProps {
 export function WizardUpload({
   files,
   textInput,
+  isSubmitting = false,
   onFilesChange,
   onTextChange,
   onContinue,
@@ -113,10 +115,10 @@ export function WizardUpload({
 
       {/* Navigation */}
       <div className="flex justify-between pt-4">
-        <Button variant="secondary" onClick={onBack}>
+        <Button variant="secondary" onClick={onBack} disabled={isSubmitting}>
           Back
         </Button>
-        <Button onClick={onContinue} disabled={!canContinue}>
+        <Button onClick={onContinue} disabled={!canContinue} isLoading={isSubmitting}>
           Continue
         </Button>
       </div>

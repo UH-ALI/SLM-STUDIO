@@ -50,11 +50,11 @@ const defaultWizardData: WizardData = {
   ],
   files: [],
   textInput: '',
-  selectedModel: 'qwen-2.5-1.5b',
+  selectedModel: 'llama-3.2-1b',
   hyperparameters: {
     epochs: 3,
     learningRate: 0.0002,
-    batchSize: 8,
+    batchSize: 1,
     maxSeqLen: 512,
     temperature: 0.3,
   },
@@ -67,6 +67,7 @@ export default function NewProjectPage() {
   const [currentStep, setCurrentStep] = useState(0);
   const [wizardData, setWizardData] = useState<WizardData>(defaultWizardData);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [projectId, setProjectId] = useState<string | null>(null);
 
   const handleSetupChange = (data: {
     name: string;
@@ -74,7 +75,19 @@ export default function NewProjectPage() {
     persona: string;
     fewShotExamples: FewShotExample[];
   }) => {
-    setWizardData((prev) => ({ ...prev, ...data }));
+    setWizardData((prev) => {
+      let nextModel = prev.selectedModel;
+      if (data.useCase !== prev.useCase) {
+        if (['medical'].includes(data.useCase)) {
+          nextModel = 'phi-3-mini';
+        } else if (['finance', 'legal'].includes(data.useCase)) {
+          nextModel = 'gemma-2-2b';
+        } else {
+          nextModel = 'llama-3.2-1b';
+        }
+      }
+      return { ...prev, ...data, selectedModel: nextModel };
+    });
   };
 
   const handleUploadChange = (files: File[]) => {
@@ -93,26 +106,25 @@ export default function NewProjectPage() {
     setWizardData((prev) => ({ ...prev, hyperparameters: hp }));
   };
 
-  // Runs the real 3-step backend flow: create project shell -> upload files -> start training.
-  // Each step is awaited and surfaced separately so a failure midway (e.g. upload succeeds
-  // but training fails to start) gives a specific error instead of one generic message,
-  // and so the project the user already created isn't silently orphaned.
-  const handleStartTraining = async () => {
+  const handleUploadContinue = async () => {
     setIsSubmitting(true);
     try {
-      // Step 1: create the project shell
-      const project = await createProject({
-        name: wizardData.name,
-        useCase: wizardData.useCase,
-        persona: wizardData.persona,
-        fewShotExamples: wizardData.fewShotExamples.filter(
-          (ex) => ex.question.trim() && ex.answer.trim()
-        ),
-      });
+      let currentProjectId = projectId;
+      // Step 1: create the project shell if not already created
+      if (!currentProjectId) {
+        const project = await createProject({
+          name: wizardData.name,
+          useCase: wizardData.useCase,
+          persona: wizardData.persona,
+          fewShotExamples: wizardData.fewShotExamples.filter(
+            (ex) => ex.question.trim() && ex.answer.trim()
+          ),
+        });
+        currentProjectId = project.id;
+        setProjectId(currentProjectId);
+      }
 
       // Step 2: upload the collected files, or convert pasted text into a .txt
-      // file if that's what the user provided instead — the backend's upload
-      // endpoint only accepts files, there's no separate "raw text" endpoint.
       const filesToUpload: File[] = [...wizardData.files];
       if (filesToUpload.length === 0 && wizardData.textInput.trim()) {
         filesToUpload.push(
@@ -121,48 +133,60 @@ export default function NewProjectPage() {
       }
 
       if (filesToUpload.length > 0) {
-        try {
-          await uploadDatasets(project.id, filesToUpload);
-        } catch (err) {
-          const detail = extractErrorDetail(err);
-          addToast({
-            type: 'error',
-            message: detail || 'Project created, but file upload failed. You can retry uploading from the project page.',
-          });
-          router.push(`/projects/${project.id}/train`);
-          return;
-        }
+        await uploadDatasets(currentProjectId, filesToUpload);
       }
-
-      // Step 3: start training with the chosen model + hyperparameters
-      try {
-        await startTraining(project.id, {
-          baseModelName: wizardData.selectedModel,
-          hyperparameters: wizardData.hyperparameters,
-        });
-      } catch (err) {
-        const detail = extractErrorDetail(err);
-        addToast({
-          type: 'error',
-          message: detail || 'Files uploaded, but starting training failed. You can retry from the project page.',
-        });
-        router.push(`/projects/${project.id}/train`);
-        return;
-      }
-
-      addToast({ type: 'success', message: 'Project created! Starting training...' });
-
-      // Navigate to training page, NEVER /dashboard
-      router.push(`/projects/${project.id}/train`);
+      
+      setIsSubmitting(false);
+      setCurrentStep(2);
     } catch (err) {
       const detail = extractErrorDetail(err);
-      addToast({ type: 'error', message: detail || 'Failed to create project' });
+      addToast({ type: 'error', message: detail || 'Failed to upload datasets.' });
       setIsSubmitting(false);
     }
   };
 
+  const handleStartTraining = async () => {
+    if (!projectId) return;
+
+    setIsSubmitting(true);
+
+    const tryStartTraining = async () => {
+      try {
+        await startTraining(projectId, {
+          baseModelName: wizardData.selectedModel,
+          hyperparameters: wizardData.hyperparameters,
+        });
+
+        addToast({ type: 'success', message: 'Project created! Starting training...' });
+        router.push(`/projects/${projectId}/train`);
+      } catch (err: any) {
+        const detail = extractErrorDetail(err);
+        // If the backend rejects because ChromaDB ingestion is still ongoing, poll again
+        if (detail?.toLowerCase().includes('processing') || detail?.toLowerCase().includes('vectors')) {
+          setTimeout(tryStartTraining, 2500);
+        } else {
+          addToast({
+            type: 'error',
+            message: detail || 'Starting training failed.',
+          });
+          setIsSubmitting(false);
+          router.push(`/projects/${projectId}/train`);
+        }
+      }
+    };
+
+    tryStartTraining();
+  };
+
   if (isSubmitting) {
-    return <LoadingBuffer />;
+    if (currentStep === 2) {
+      return <LoadingBuffer messages={[
+        'Processing your documents...',
+        'Building knowledge base...',
+        'Indexing content...',
+        'Preparing training pipeline...'
+      ]} />;
+    }
   }
 
   return (
@@ -184,9 +208,10 @@ export default function NewProjectPage() {
           <WizardUpload
             files={wizardData.files}
             textInput={wizardData.textInput}
+            isSubmitting={isSubmitting}
             onFilesChange={handleUploadChange}
             onTextChange={handleTextChange}
-            onContinue={() => setCurrentStep(2)}
+            onContinue={handleUploadContinue}
             onBack={() => setCurrentStep(0)}
           />
         )}

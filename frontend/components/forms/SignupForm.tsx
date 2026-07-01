@@ -45,7 +45,10 @@ export function SignupForm() {
       case 'email':
         return !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ? 'Invalid email address' : '';
       case 'password':
-        return value.length < 8 ? 'Password must be at least 8 characters' : '';
+        if (value.length < 8) return 'Password must be at least 8 characters';
+        if (!/[A-Z]/.test(value)) return 'Password must contain at least one uppercase letter';
+        if (!/\d/.test(value)) return 'Password must contain at least one digit';
+        return '';
       case 'confirmPassword':
         return value !== formData.password ? 'Passwords do not match' : '';
       default:

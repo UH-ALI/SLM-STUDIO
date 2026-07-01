@@ -81,7 +81,7 @@ export const Slider = forwardRef<HTMLInputElement, SliderProps>(
           {/* Custom thumb */}
           <div
             className={classNames(
-              'absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full shadow-[0_0_10px_rgba(212,168,83,0.5)] cursor-pointer',
+              'absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full shadow-[0_0_10px_rgba(212,168,83,0.5)] cursor-pointer pointer-events-none',
               'transition-transform duration-150 hover:scale-125',
               disabled && 'opacity-50 cursor-not-allowed'
             )}

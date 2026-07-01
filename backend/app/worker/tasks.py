@@ -184,14 +184,14 @@ def train_model_task(self, project_id: str, job_id: str):
         project.metrics = {
             "epoch": project.epoch,
             "trainLoss": finetune_results.get("train_loss"),
-            "valLoss": None,  # Would require validation set
+            "valLoss": finetune_results.get("val_loss"),
             "learningRate": finetune_results.get("learning_rate"),
-            "perplexity": None,  # Would require separate calculation
-            "gpuUtil": None,   # Would require nvidia-ml-py
+            "gpuUtil": finetune_results.get("gpu_util"),
             "adapterSizeMb": finetune_results.get("adapter_size_mb"),
             "totalSteps": finetune_results.get("total_steps"),
             "finalLoss": finetune_results.get("final_loss"),
             "adapterPath": finetune_results.get("adapter_path"),
+            "trainingHistory": finetune_results.get("training_history", []),
         }
         job.status = JobStatus.COMPLETED
         db.commit()

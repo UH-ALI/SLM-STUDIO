@@ -37,8 +37,9 @@ MODEL_CONFIGS = {
 # Keep this in sync with the frontend's model selector component.
 # Last updated: 2026-06-20
 BASE_MODEL_ALIASES = {
-    "slm-lite":    "unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit",
-    "slm-pro":     "unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit",  # same for now, placeholder for future
+    "llama-3.2-1b": "unsloth/Llama-3.2-1B-Instruct-bnb-4bit",
+    "gemma-2-2b": "unsloth/gemma-2-2b-it-bnb-4bit",
+    "phi-3-mini": "unsloth/Phi-3-mini-4k-instruct-bnb-4bit",
 }
 
 MAX_SEQ_LEN   = 2048
@@ -169,8 +170,14 @@ def run_finetuning_pipeline(job_id: str, use_case: str, hyperparameters: dict = 
 
     dataset = dataset.map(format_prompts, batched=True)
 
+    # 2.5 Split dataset into train (90%) and eval (10%) for validation loss
+    split = dataset.train_test_split(test_size=0.1, seed=42)
+    train_dataset = split["train"]
+    eval_dataset = split["test"]
+    print(f"📂 Split: {len(train_dataset)} train / {len(eval_dataset)} eval examples")
+
     # 3. Training Config
-    print(f"\n🚀 Fine-tuning: {epochs} epochs | {len(dataset)} examples | model={use_case_lower}")
+    print(f"\n🚀 Fine-tuning: {epochs} epochs | {len(train_dataset)} train examples | model={use_case_lower}")
 
     training_args = SFTConfig(
         output_dir=output_dir,
@@ -178,13 +185,16 @@ def run_finetuning_pipeline(job_id: str, use_case: str, hyperparameters: dict = 
         max_length=max_seq_len,
         num_train_epochs=epochs,
         per_device_train_batch_size=batch_size,
+        per_device_eval_batch_size=batch_size,
         gradient_accumulation_steps=grad_acc,
+        eval_accumulation_steps=1,
         learning_rate=learning_rate,
         warmup_ratio=0.1,
         fp16=not torch.cuda.is_bf16_supported(),
         bf16=torch.cuda.is_bf16_supported(),
         logging_steps=5,
         save_strategy="epoch",
+        eval_strategy="epoch",          # ← evaluate at each epoch
         optim="adamw_8bit",
         weight_decay=0.01,
         lr_scheduler_type="cosine",
@@ -194,24 +204,105 @@ def run_finetuning_pipeline(job_id: str, use_case: str, hyperparameters: dict = 
         packing=False,
     )
 
+    # ─── GPU UTILIZATION HELPER ──────────────────────────────────────────────
+    def get_gpu_utilization() -> float:
+        """Return current GPU utilization % (0–100). Falls back to 0.0."""
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5
+            )
+            return float(result.stdout.strip().split("\n")[0])
+        except Exception:
+            return 0.0
+
+    # ─── EPOCH CALLBACK ──────────────────────────────────────────────────────
+    from transformers import TrainerCallback
+    epoch_history = []   # collects per-epoch snapshots
+
+    class MemoryClearCallback(TrainerCallback):
+        def on_evaluate(self, args, state, control, **kwargs):
+            # Aggressively clear PyTorch allocator cache after validation
+            # to prevent evaluation tensors from starving training memory
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
+
+    class EpochUpdateCallback(TrainerCallback):
+        def on_epoch_end(self, args, state, control, **kwargs):
+            try:
+                current_epoch = int(round(state.epoch))
+
+                # Collect train loss: average of all log entries for this epoch
+                log_history = state.log_history
+                loss_entries = [e for e in log_history if "loss" in e]
+                train_loss = round(loss_entries[-1]["loss"], 4) if loss_entries else None
+
+                # Collect eval loss: the most recent eval_loss entry
+                eval_entries = [e for e in log_history if "eval_loss" in e]
+                val_loss = round(eval_entries[-1]["eval_loss"], 4) if eval_entries else None
+
+                # Learning rate from the most recent logged step
+                lr_entries = [e for e in log_history if "learning_rate" in e]
+                lr = lr_entries[-1]["learning_rate"] if lr_entries else learning_rate
+
+                gpu_util = get_gpu_utilization()
+
+                epoch_snapshot = {
+                    "epoch": current_epoch,
+                    "trainLoss": train_loss,
+                    "valLoss": val_loss,
+                    "learningRate": lr,
+                    "gpuUtil": gpu_util,
+                }
+                epoch_history.append(epoch_snapshot)
+
+                # Persist epoch + progress + live metrics to DB
+                db_session = SessionLocal()
+                job = db_session.query(TrainingJob).filter(TrainingJob.id == job_id).first()
+                if job and job.project:
+                    job.project.epoch = current_epoch
+                    progress_pct = 50 + int((current_epoch / epochs) * 40)
+                    job.project.progress = min(progress_pct, 90)
+                    # Store live metrics so the frontend can display them mid-training
+                    job.project.metrics = {
+                        "epoch": current_epoch,
+                        "trainLoss": train_loss,
+                        "valLoss": val_loss,
+                        "learningRate": lr,
+                        "gpuUtil": gpu_util,
+                    }
+                    db_session.commit()
+                db_session.close()
+            except Exception as e:
+                print(f"Failed to update DB on epoch end: {e}")
+
     trainer = SFTTrainer(
         model=model,
-        train_dataset=dataset,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,       # ← pass eval split
         processing_class=tokenizer,
         args=training_args,
+        callbacks=[MemoryClearCallback(), EpochUpdateCallback()],
     )
 
     # 4. Execute Training
     trainer.train()
+    # Use the last active recorded GPU util if available, rather than measuring it now (when it's idle)
+    gpu_util_final = epoch_history[-1]["gpuUtil"] if epoch_history else get_gpu_utilization()
     print(f"\n✅ Training complete. Peak VRAM: {torch.cuda.max_memory_allocated()/1e9:.2f} GB")
 
     # 5. Post-training loss health check
     try:
         log_history  = trainer.state.log_history
         loss_entries = [e for e in log_history if "loss" in e]
+        eval_entries = [e for e in log_history if "eval_loss" in e]
         if loss_entries:
             final_loss = loss_entries[-1]["loss"]
             print(f"\n📊 Final training loss: {final_loss:.4f}")
+            if eval_entries:
+                print(f"📊 Final validation loss: {eval_entries[-1]['eval_loss']:.4f}")
             if final_loss < 0.5:
                 print("⚠️  Loss < 0.5 — possible overfitting. Consider reducing EPOCHS.")
             elif final_loss <= 1.3:
@@ -233,7 +324,14 @@ def run_finetuning_pipeline(job_id: str, use_case: str, hyperparameters: dict = 
     )
     print(f"💾 Adapter successfully saved to '{output_dir}'  ({total_size/1e6:.1f} MB)")
 
-    # 6.5 Build metrics dict for caller (L3 fix)
+    # 6.5 Build metrics dict for caller
+    log_history = trainer.state.log_history
+    loss_entries = [e for e in log_history if "loss" in e]
+    eval_entries = [e for e in log_history if "eval_loss" in e]
+
+    final_train_loss = round(loss_entries[-1]["loss"], 4) if loss_entries else None
+    final_val_loss = round(eval_entries[-1]["eval_loss"], 4) if eval_entries else None
+
     metrics = {
         "adapter_path": output_dir,
         "adapter_size_mb": round(total_size / 1e6, 2),
@@ -243,17 +341,11 @@ def run_finetuning_pipeline(job_id: str, use_case: str, hyperparameters: dict = 
         "max_seq_len": max_seq_len,
         "batch_size": batch_size,
         "gradient_accumulation_steps": grad_acc,
+        "train_loss": final_train_loss,
+        "final_loss": final_train_loss,
+        "val_loss": final_val_loss,
+        "gpu_util": gpu_util_final,
+        "training_history": epoch_history,
     }
-
-    # Add final loss if available
-    try:
-        log_history = trainer.state.log_history
-        loss_entries = [e for e in log_history if "loss" in e]
-        if loss_entries:
-            metrics["final_loss"] = round(loss_entries[-1]["loss"], 4)
-            metrics["train_loss"] = round(loss_entries[-1]["loss"], 4)
-    except Exception:
-        metrics["final_loss"] = None
-        metrics["train_loss"] = None
 
     return metrics

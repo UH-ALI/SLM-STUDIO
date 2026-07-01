@@ -14,12 +14,12 @@ export function useJobs() {
   });
 }
 
-export function useJob(id: string | null) {
+export function useProjectStatus(id: string | null) {
   const { data, isLoading, error } = useQuery({
-    queryKey: ['job', id],
+    queryKey: ['projectStatus', id],
     queryFn: async () => {
       if (!id) return null;
-      const response = await api.get(`/jobs/${id}/status`);
+      const response = await api.get(`/projects/${id}/status`);
       return response.data;
     },
     enabled: !!id,

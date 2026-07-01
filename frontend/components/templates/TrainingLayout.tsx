@@ -1,14 +1,17 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { TrainingPanel } from "@/components/organisms/TrainingPanel";
 import { LogPanel } from "@/components/organisms/LogPanel";
 import { GraphPanel } from "@/components/organisms/GraphPanel";
 import { ErrorPanel } from "@/components/organisms/ErrorPanel";
 import { LoadingBuffer } from "@/components/organisms/LoadingBuffer";
-import { useJob } from "@/hooks/useJobs";
+import { WarningModal } from "@/components/organisms/WarningModal";
+import { useProjectStatus } from "@/hooks/useJobs";
 import { useTrainingStore } from "@/stores/trainingStore";
+import { useProjectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
 
 interface TrainingLayoutProps {
@@ -18,7 +21,8 @@ interface TrainingLayoutProps {
 export function TrainingLayout({ children }: TrainingLayoutProps) {
   const params = useParams();
   const jobId = params.id as string;
-  const { data: job, isLoading } = useJob(jobId);
+  const queryClient = useQueryClient();
+  const { data: job, isLoading } = useProjectStatus(jobId);
   const {
     status,
     metrics,
@@ -27,12 +31,91 @@ export function TrainingLayout({ children }: TrainingLayoutProps) {
     epoch,
     history,
     setStatus,
-    updateMetrics,
     setLogs,
+    setHistory,
     setProgress,
     setEpoch,
   } = useTrainingStore();
   const { addToast } = useUIStore();
+  const { fetchProject, startTraining } = useProjectStore();
+
+  const [showRetryModal, setShowRetryModal] = useState(false);
+  const [retryProjectData, setRetryProjectData] = useState<any>(null);
+
+  const executeRetry = async (useSafeDefaults: boolean) => {
+    setShowRetryModal(false);
+    if (!retryProjectData) return;
+    
+    try {
+      addToast({ type: "info", message: "Retrying training..." });
+      
+      let hyperparameters = retryProjectData.hyperparameters || {};
+      let temperature = retryProjectData.inferenceTemperature ?? hyperparameters.temperature ?? 0.3;
+
+      if (useSafeDefaults) {
+        hyperparameters = {
+          batchSize: 1,
+          maxSeqLen: 2048,
+          epochs: 3,
+          learningRate: 0.0002,
+        };
+      }
+
+      // Clear local training store state so we don't show old logs/orbs while restarting
+      const { reset } = useTrainingStore.getState();
+      reset();
+
+      await startTraining(jobId, {
+        baseModelName: retryProjectData.baseModelName || "llama-3.2-1b",
+        hyperparameters: {
+          ...hyperparameters,
+          temperature,
+        }
+      });
+      
+      // Optimistically set React Query cache to 'processing' so it doesn't flash the old failed state
+      queryClient.setQueryData(['projectStatus', jobId], (old: any) => ({
+        ...old,
+        status: 'processing',
+        progress: 0,
+        epoch: 0,
+        logs: [],
+        metrics: null,
+      }));
+      
+      // Invalidate React Query so it immediately re-fetches the actual status
+      queryClient.invalidateQueries({ queryKey: ['projectStatus', jobId] });
+      
+      addToast({ type: "success", message: "Training restarted successfully!" });
+    } catch (err) {
+      addToast({ type: "error", message: "Failed to restart training" });
+    }
+  };
+
+  const handleRetry = async () => {
+    try {
+      addToast({ type: "info", message: "Fetching project configuration..." });
+      const project = await fetchProject(jobId);
+      
+      const errorMsg = job?.errorMessage?.toLowerCase() || "";
+      const isResourceError = errorMsg.includes('out of memory') || 
+                              errorMsg.includes('oom') || 
+                              errorMsg.includes('acceleratorerror') ||
+                              errorMsg.includes('runtimeerror') ||
+                              errorMsg.includes('out of bounds');
+
+      if (isResourceError) {
+        setRetryProjectData(project);
+        setShowRetryModal(true);
+        return;
+      }
+      
+      setRetryProjectData(project);
+      await executeRetry(false);
+    } catch (err) {
+      addToast({ type: "error", message: "Failed to fetch project configuration" });
+    }
+  };
 
   // Sync job data to training store
   useEffect(() => {
@@ -52,7 +135,16 @@ export function TrainingLayout({ children }: TrainingLayoutProps) {
       setProgress(job.progress || 0);
       setEpoch(job.epoch || 0);
       if (job.metrics) {
-        updateMetrics(job.metrics);
+        // Only update the metrics ref, don't append to history on every poll
+        useTrainingStore.setState({ metrics: job.metrics });
+
+        // Populate graph history from backend's per-epoch training history
+        if (job.metrics.trainingHistory && job.metrics.trainingHistory.length > 0) {
+          setHistory(job.metrics.trainingHistory);
+        } else if (history.length === 0 && jobStatus === "completed") {
+          // Fallback: if no trainingHistory but we have final metrics, create a single-point history
+          setHistory([job.metrics]);
+        }
       }
       // Bug 4 fix: replace logs in bulk instead of appending duplicates
       if (job.logs && job.logs.length > 0) {
@@ -67,6 +159,14 @@ export function TrainingLayout({ children }: TrainingLayoutProps) {
 
   return (
     <div className="space-y-6">
+      {showRetryModal && (
+        <WarningModal 
+          title="Retry with Safe Defaults"
+          description="The training failed because the hyperparameters exceeded system limits. Would you like to retry using safe fallback defaults?"
+          onCancel={() => setShowRetryModal(false)} 
+          onContinue={() => executeRetry(true)} 
+        />
+      )}
       {/* Main panels */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Left: Training Panel */}
@@ -112,11 +212,8 @@ export function TrainingLayout({ children }: TrainingLayoutProps) {
 
       {status === "failed" && (
         <ErrorPanel
-          errorMessage={job?.errorMessage || "Training failed"}
-          onRetry={() => {
-            // Retry logic
-            addToast({ type: "info", message: "Retrying training..." });
-          }}
+          errorMessage={job?.errorMessage || job?.error_message || "Training failed"}
+          onRetry={handleRetry}
         />
       )}
 

@@ -87,8 +87,8 @@ export function TrainingPanel({
           value={metrics?.learningRate ?? '—'}
         />
         <MetricRow
-          label="Perplexity"
-          value={metrics?.perplexity ?? '—'}
+          label="GPU Util"
+          value={metrics?.gpuUtil != null ? `${metrics.gpuUtil.toFixed(1)}%` : '—'}
         />
       </div>
     </div>

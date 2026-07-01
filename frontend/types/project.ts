@@ -24,6 +24,7 @@ export interface Project {
   datasetId: string;
   createdAt: string;
   errorMessage: string | null;
+  inferenceTemperature?: number;
   progress?: number;
   epoch?: number;
 }
@@ -51,12 +52,12 @@ export interface Metrics {
   trainLoss: number;
   valLoss: number;
   learningRate: number;
-  perplexity: number;
   gpuUtil: number;
 }
 
 export interface LogEntry {
-  time: string;
+  time?: string;
+  createdAt?: string;
   level: 'info' | 'warn' | 'error' | 'success';
   message: string;
 }

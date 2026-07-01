@@ -14,7 +14,7 @@ export const ALLOWED_FILE_EXTENSIONS = ['.pdf', '.docx', '.txt', '.csv'];
 export const DEFAULT_HYPERPARAMETERS: Required<Hyperparameters> = {
   epochs: 3,
   learningRate: 0.0002,
-  batchSize: 8,
+  batchSize: 1,
   maxSeqLen: 512,
   gradientAccumulationSteps: 1,
   temperature: 0.3,
@@ -30,6 +30,7 @@ export const USE_CASES = [
 ] as const;
 
 export const MODEL_OPTIONS = [
-  { value: 'qwen-2.5-1.5b', label: 'Qwen 2.5 1.5B', description: 'Balanced performance and speed' },
-  { value: 'qwen-2.5-0.5b', label: 'Qwen 2.5 0.5B', description: 'Faster training, lighter weight' },
+  { value: 'llama-3.2-1b', label: 'Llama 3.2 1B', description: 'Fast, lightweight instruct model' },
+  { value: 'gemma-2-2b', label: 'Gemma 2 2B', description: 'Reasoning-heavy instruct model' },
+  { value: 'phi-3-mini', label: 'Phi 3 Mini', description: 'Precision-critical instruct model' },
 ] as const;

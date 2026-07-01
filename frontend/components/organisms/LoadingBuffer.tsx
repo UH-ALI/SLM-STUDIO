@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { Brain } from 'lucide-react';
 import { classNames } from '@/lib/utils';
 
-const loadingMessages = [
+const defaultLoadingMessages = [
   'Initializing model...',
   'Loading dataset...',
   'Preparing training environment...',
@@ -14,14 +14,15 @@ const loadingMessages = [
 
 interface LoadingBufferProps {
   className?: string;
+  messages?: string[];
 }
 
-export function LoadingBuffer({ className }: LoadingBufferProps) {
+export function LoadingBuffer({ className, messages = defaultLoadingMessages }: LoadingBufferProps) {
   const [messageIndex, setMessageIndex] = useState(0);
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setMessageIndex((prev) => (prev + 1) % loadingMessages.length);
+      setMessageIndex((prev) => (prev + 1) % messages.length);
     }, 2000);
 
     return () => clearInterval(interval);
@@ -55,7 +56,7 @@ export function LoadingBuffer({ className }: LoadingBufferProps) {
             key={messageIndex}
             className="text-sm text-fern animate-fade-in text-center"
           >
-            {loadingMessages[messageIndex]}
+            {messages[messageIndex]}
           </p>
         </div>
 
@@ -63,7 +64,7 @@ export function LoadingBuffer({ className }: LoadingBufferProps) {
         <div className="w-48 h-1 bg-white/[0.06] rounded-full overflow-hidden">
           <div
             className="h-full bg-gradient-to-r from-gold to-sage rounded-full transition-all duration-500 ease-brand"
-            style={{ width: `${((messageIndex + 1) / loadingMessages.length) * 100}%` }}
+            style={{ width: `${((messageIndex + 1) / messages.length) * 100}%` }}
           />
         </div>
       </div>

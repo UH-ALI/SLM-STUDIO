@@ -33,27 +33,27 @@ export function GraphPanel({ data, className }: GraphPanelProps) {
       {/* Summary cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 pt-4 border-t border-white/[0.06]">
         <div className="bg-[#121B16]/40 rounded-xl p-3">
-          <p className="text-[0.65rem] text-muted uppercase tracking-wider mb-1">Final Loss</p>
+          <p className="text-[0.65rem] text-muted uppercase tracking-wider mb-1">Train Loss</p>
           <p className="font-mono text-sm font-semibold text-gold">
-            {latest.trainLoss.toFixed(4)}
+            {latest.trainLoss != null ? latest.trainLoss.toFixed(4) : '—'}
           </p>
         </div>
         <div className="bg-[#121B16]/40 rounded-xl p-3">
-          <p className="text-[0.65rem] text-muted uppercase tracking-wider mb-1">Perplexity</p>
+          <p className="text-[0.65rem] text-muted uppercase tracking-wider mb-1">Val Loss</p>
           <p className="font-mono text-sm font-semibold text-mint">
-            {latest.perplexity.toFixed(2)}
+            {latest.valLoss != null ? latest.valLoss.toFixed(4) : '—'}
           </p>
         </div>
         <div className="bg-[#121B16]/40 rounded-xl p-3">
           <p className="text-[0.65rem] text-muted uppercase tracking-wider mb-1">Learning Rate</p>
           <p className="font-mono text-sm font-semibold text-sage">
-            {latest.learningRate.toExponential(2)}
+            {latest.learningRate != null ? latest.learningRate.toExponential(2) : '—'}
           </p>
         </div>
         <div className="bg-[#121B16]/40 rounded-xl p-3">
           <p className="text-[0.65rem] text-muted uppercase tracking-wider mb-1">GPU Util</p>
           <p className="font-mono text-sm font-semibold text-amber">
-            {latest.gpuUtil.toFixed(1)}%
+            {latest.gpuUtil != null ? `${latest.gpuUtil.toFixed(1)}%` : '—'}
           </p>
         </div>
       </div>

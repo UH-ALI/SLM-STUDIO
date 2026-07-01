@@ -31,28 +31,57 @@ export function TrainingGraph({ data, className }: TrainingGraphProps) {
     c.roundRect(0, 0, W, H, 16);
     c.fill();
 
-    const trainLoss = data.map((d) => d.trainLoss);
-    const valLoss = data.map((d) => d.valLoss);
-    const perp = data.map((d) => d.perplexity);
-    const gpu = data.map((d) => d.gpuUtil);
+    // Extract series without turning nulls into 0
+    // For valLoss, we'll carry forward the last known value to avoid spikes to 0
+    const rawTrain = data.map((d) => d.trainLoss);
+    const rawVal = data.map((d) => d.valLoss);
+    const rawGpu = data.map((d) => d.gpuUtil);
 
-    // Normalize each series to 0–1 range so they all fill the same height
-    const normalize = (arr: number[]) => {
-      const min = Math.min(...arr);
-      const max = Math.max(...arr);
-      return arr.map((v) => (max === min ? 0.5 : (v - min) / (max - min)));
+    // Fill forward nulls for a continuous line
+    const fillForward = (arr: (number | null | undefined)[]) => {
+      let last = arr.find((v) => v != null) ?? 0;
+      return arr.map((v) => {
+        if (v != null) last = v;
+        return last;
+      });
     };
 
-    const nTrain = normalize(trainLoss);
-    const nVal = normalize(valLoss);
-    const nPerp = normalize(perp);
-    const nGpu = normalize(gpu);
+    const trainLoss = fillForward(rawTrain);
+    const valLoss = fillForward(rawVal);
+    const gpu = fillForward(rawGpu);
 
-    const xPos = (i: number) => PAD.left + (i / (data.length - 1)) * plotW;
+    // Calculate global bounds for Loss (shared between Train and Val)
+    const validLosses = [...trainLoss, ...valLoss].filter((v) => v != null && !isNaN(v));
+    const maxLoss = validLosses.length > 0 ? Math.max(...validLosses) * 1.1 : 1; // 10% headroom
+    const minLoss = validLosses.length > 0 ? Math.max(0, Math.min(...validLosses) - 0.1) : 0;
+
+    // GPU is fixed 0-100
+    const maxGpu = 100;
+    const minGpu = 0;
+
+    const normalizeLoss = (arr: number[]) =>
+      arr.map((v) => (maxLoss === minLoss ? 0.5 : (v - minLoss) / (maxLoss - minLoss)));
+    const normalizeGpu = (arr: number[]) =>
+      arr.map((v) => (v - minGpu) / (maxGpu - minGpu));
+
+    const nTrain = normalizeLoss(trainLoss);
+    const nVal = normalizeLoss(valLoss);
+    const nGpu = normalizeGpu(gpu);
+
+    const effectiveData = data.length === 1 ? [data[0], data[0]] : data;
+    const effectiveNTrain = data.length === 1 ? [nTrain[0], nTrain[0]] : nTrain;
+    const effectiveNVal = data.length === 1 ? [nVal[0], nVal[0]] : nVal;
+    const effectiveNGpu = data.length === 1 ? [nGpu[0], nGpu[0]] : nGpu;
+
+    const pointCount = effectiveData.length;
+
+    const xPos = (i: number) =>
+      PAD.left + (pointCount > 1 ? (i / (pointCount - 1)) * plotW : plotW / 2);
     // Inverted: high normalized value = tall peak from bottom
     const yPos = (v: number) => PAD.top + plotH - v * plotH;
 
-    // Subtle grid
+    // Grid and Y-axis labels
+    c.font = "10px Inter, sans-serif";
     for (let g = 0; g <= 4; g++) {
       const y = PAD.top + (g / 4) * plotH;
       c.beginPath();
@@ -61,42 +90,48 @@ export function TrainingGraph({ data, className }: TrainingGraphProps) {
       c.strokeStyle = "rgba(255,255,255,0.04)";
       c.lineWidth = 1;
       c.stroke();
+
+      // Left Y-axis (Loss)
+      const lossVal = maxLoss - (g / 4) * (maxLoss - minLoss);
+      c.fillStyle = "#8A9B8E";
+      c.textAlign = "right";
+      c.fillText(lossVal.toFixed(2), PAD.left - 8, y + 4);
+
+      // Right Y-axis (GPU)
+      const gpuVal = maxGpu - (g / 4) * (maxGpu - minGpu);
+      c.fillStyle = "#8A9B8E";
+      c.textAlign = "left";
+      c.fillText(`${Math.round(gpuVal)}%`, PAD.left + plotW + 8, y + 4);
     }
 
     // X axis labels
-    const step = Math.ceil(data.length / 8);
-    data.forEach((d, i) => {
-      if (i % step === 0 || i === data.length - 1) {
+    const step = Math.max(1, Math.ceil(effectiveData.length / 8));
+    effectiveData.forEach((d, i) => {
+      if (i % step === 0 || i === effectiveData.length - 1) {
         c.fillStyle = "#4A5D52";
-        c.font = "10px Inter, sans-serif";
         c.textAlign = "center";
         c.fillText(`Epoch ${d.epoch}`, xPos(i), H - 10);
       }
     });
 
-    // Draw filled area — NO border line, pure fill only
+    // Draw filled area — pure soft gradients, no harsh lines
     function drawFill(values: number[], color: string, alpha: number) {
       if (values.length < 2) return;
 
       const grad = c!.createLinearGradient(0, PAD.top, 0, PAD.top + plotH);
-      grad.addColorStop(
-        0,
-        color.replace(")", `, ${alpha})`).replace("rgb", "rgba"),
-      );
-      grad.addColorStop(
-        1,
-        color.replace(")", ", 0.02)").replace("rgb", "rgba"),
-      );
+      // We use globalCompositeOperation to make overlaps look luminous instead of muddy
+      c!.globalCompositeOperation = "screen";
+
+      grad.addColorStop(0, color.replace(")", `, ${alpha})`).replace("rgb", "rgba"));
+      grad.addColorStop(1, color.replace(")", ", 0.02)").replace("rgb", "rgba"));
 
       c!.beginPath();
       c!.moveTo(xPos(0), PAD.top + plotH);
       c!.lineTo(xPos(0), yPos(values[0]));
 
       for (let i = 1; i < values.length; i++) {
-        const x0 = xPos(i - 1),
-          y0 = yPos(values[i - 1]);
-        const x1 = xPos(i),
-          y1 = yPos(values[i]);
+        const x0 = xPos(i - 1), y0 = yPos(values[i - 1]);
+        const x1 = xPos(i), y1 = yPos(values[i]);
         const cpx = (x0 + x1) / 2;
         c!.bezierCurveTo(cpx, y0, cpx, y1, x1, y1);
       }
@@ -105,26 +140,26 @@ export function TrainingGraph({ data, className }: TrainingGraphProps) {
       c!.closePath();
       c!.fillStyle = grad;
       c!.fill();
+      
+      // Reset composite operation
+      c!.globalCompositeOperation = "source-over";
     }
 
-    // Draw back to front — GPU first (widest/tallest), then others on top
-    // Colors match site palette, soft pastels like reference
-    drawFill(nGpu, "rgb(233, 163, 25)", 0.3); // amber  — GPU
-    drawFill(nPerp, "rgb(94, 234, 212)", 0.35); // mint   — Perplexity
-    drawFill(nVal, "rgb(127, 176, 105)", 0.4); // sage   — Val Loss
-    drawFill(nTrain, "rgb(212, 168, 83)", 0.55); // gold   — Train Loss (front)
+    // Draw back to front — GPU first, then Val Loss, then Train Loss
+    drawFill(effectiveNGpu, "rgb(77, 208, 225)", 0.25); // GPU (Cyan - distinct color)
+    drawFill(effectiveNVal, "rgb(127, 176, 105)", 0.35); // Val Loss (Sage)
+    drawFill(effectiveNTrain, "rgb(212, 168, 83)", 0.45); // Train Loss (Gold)
 
-    // Legend — small color swatches, no lines
+    // Legend — small color swatches
     const legend = [
       { label: "Train Loss", color: "#D4A853" },
       { label: "Val Loss", color: "#7FB069" },
-      { label: "Perplexity", color: "#5EEAD4" },
-      { label: "GPU Util %", color: "#E9A319" },
+      { label: "GPU Util %", color: "#4DD0E1" },
     ];
     let lx = PAD.left;
     const ly = 14;
     legend.forEach(({ label, color }) => {
-      // Small filled rounded rect swatch
+      // Small filled rounded rect swatch with glow
       c.fillStyle = color + "99";
       c.beginPath();
       c.roundRect(lx, ly - 7, 14, 8, 3);

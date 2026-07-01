@@ -6,11 +6,18 @@ import { classNames } from '@/lib/utils';
 import { Button } from '@/components/atoms/Button';
 
 interface WarningModalProps {
+  title?: string;
+  description?: string;
   onCancel: () => void;
   onContinue: () => void;
 }
 
-export function WarningModal({ onCancel, onContinue }: WarningModalProps) {
+export function WarningModal({ 
+  title = "Advanced Settings",
+  description = "The model has been pre-configured with optimal parameters based on your dataset and use case. Altering these settings can create both negative and positive impacts on your model's performance.",
+  onCancel, 
+  onContinue 
+}: WarningModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
   const firstFocusRef = useRef<HTMLButtonElement>(null);
 
@@ -64,14 +71,12 @@ export function WarningModal({ onCancel, onContinue }: WarningModalProps) {
           id="warning-title"
           className="text-lg font-semibold text-ivory mb-3"
         >
-          Advanced Settings
+          {title}
         </h3>
 
         {/* Description */}
         <p className="text-sm text-fern leading-relaxed mb-6">
-          The model has been pre-configured with optimal parameters based on your dataset
-          and use case. Altering these settings can create both negative and positive
-          impacts on your model&apos;s performance.
+          {description}
         </p>
 
         {/* Actions */}

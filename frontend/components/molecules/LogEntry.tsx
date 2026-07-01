@@ -21,12 +21,15 @@ const levelLabels: Record<LogEntryType['level'], string> = {
 };
 
 export function LogEntry({ log, className }: LogEntryProps) {
-  const time = new Date(log.time).toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
+  const rawTime = log.createdAt || log.time;
+  const time = rawTime
+    ? new Date(rawTime).toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      })
+    : '--:--:--';
 
   return (
     <div

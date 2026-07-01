@@ -19,8 +19,9 @@ interface WizardConfigureProps {
 }
 
 const models = [
-  { name: 'Qwen 2.5 1.5B', description: 'Balanced performance and speed', value: 'qwen-2.5-1.5b' },
-  { name: 'Qwen 2.5 0.5B', description: 'Faster training, lighter weight', value: 'qwen-2.5-0.5b' },
+  { name: 'Llama 3.2 1B', description: 'Fast, lightweight instruct model', value: 'llama-3.2-1b' },
+  { name: 'Gemma 2 2B', description: 'Reasoning-heavy instruct model', value: 'gemma-2-2b' },
+  { name: 'Phi 3 Mini', description: 'Precision-critical instruct model', value: 'phi-3-mini' },
 ];
 
 export function WizardConfigure({
@@ -53,7 +54,7 @@ export function WizardConfigure({
       <div>
         <h3 className="text-sm font-semibold text-ivory mb-1">Select Model</h3>
         <p className="text-xs text-fern mb-3">Choose the base model for fine-tuning</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {models.map((model) => (
             <ModelCard
               key={model.value}

@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { Inter, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
 import { QueryClientProvider } from '@/components/QueryClientProvider';
-import { MSWProvider } from '@/components/MSWProvider';
+import { AuthProvider } from '@/components/AuthProvider';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -64,9 +64,9 @@ export default function RootLayout({
         <div aria-live="assertive" aria-atomic="true" className="sr-only" id="aria-live-assertive" />
 
         <QueryClientProvider>
-          <MSWProvider>
+          <AuthProvider>
             {children}
-          </MSWProvider>
+          </AuthProvider>
         </QueryClientProvider>
       </body>
     </html>

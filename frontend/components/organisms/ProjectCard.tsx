@@ -54,9 +54,9 @@ interface ProjectCardProps {
 export function ProjectCard({ project, onMenuAction, className }: ProjectCardProps) {
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
-  const Icon = useCaseIcons[project.useCase];
-  const gradient = useCaseGradients[project.useCase];
-  const iconColor = useCaseIconColors[project.useCase];
+  const Icon = useCaseIcons[project.useCase] || Globe;
+  const gradient = useCaseGradients[project.useCase] || 'from-sage/30 to-mint/20';
+  const iconColor = useCaseIconColors[project.useCase] || 'text-sage';
 
   const statusVariant: 'deployed' | 'training' | 'ready' | 'failed' =
     project.status === 'completed'
@@ -75,8 +75,18 @@ export function ProjectCard({ project, onMenuAction, className }: ProjectCardPro
     }
   };
 
-  const totalEpochs = project.hyperparameters.epochs || 50;
+  const totalEpochs = project.hyperparameters?.epochs || 50;
   const currentEpoch = project.epoch || 0;
+
+  const safeDateStr = (() => {
+    try {
+      const d = new Date(project.createdAt || Date.now());
+      if (isNaN(d.getTime())) return new Date().toLocaleDateString();
+      return d.toLocaleDateString();
+    } catch {
+      return new Date().toLocaleDateString();
+    }
+  })();
 
   return (
     <div
@@ -172,7 +182,7 @@ export function ProjectCard({ project, onMenuAction, className }: ProjectCardPro
         ) : (
           <div className="flex items-center gap-1.5 text-xs text-muted">
             <Clock size={12} />
-            <span>{new Date(project.createdAt).toLocaleDateString()}</span>
+            <span>{safeDateStr}</span>
           </div>
         )}
 

@@ -5,8 +5,10 @@ export function classNames(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
 }
 
-export function formatRelativeTime(dateString: string): string {
+export function formatRelativeTime(dateString?: string): string {
+  if (!dateString) return 'just now';
   const date = new Date(dateString);
+  if (isNaN(date.getTime())) return 'recently';
   const now = new Date();
   const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
 
