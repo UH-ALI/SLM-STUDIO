@@ -16,6 +16,18 @@ warnings.filterwarnings("ignore", message=".*max_new_tokens.*max_length.*")
 warnings.filterwarnings("ignore", message=".*warmup_ratio.*deprecated.*")
 transformers.logging.set_verbosity_error()
 
+# ─── QWEN3 OUTPUT CLEANING ──────────────────────────────────────────────────
+_THINK_BLOCK = re.compile(r'<think>.*?</think>', re.DOTALL)
+
+def _clean_model_output(text: str) -> str:
+    """Strip Qwen3 <think> reasoning blocks and normalize whitespace."""
+    text = _THINK_BLOCK.sub('', text)
+    # Fix merged words: insert space before uppercase letters that follow lowercase
+    text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
+    # Collapse multiple spaces
+    text = re.sub(r' {2,}', ' ', text)
+    return text.strip()
+
 # --- HARDWARE DETECTOR ---
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -116,20 +128,31 @@ def unload_model(job_id: str) -> bool:
             print("  Manually unloaded model (CPU mode)")
         return True
 
+def free_all_memory() -> bool:
+    """Forcefully drop ALL cached models from VRAM (used by Worker before training)."""
+    global ACTIVE_MODELS
+    with _cache_lock:
+        keys = list(ACTIVE_MODELS.keys())
+        for k in keys:
+            del ACTIVE_MODELS[k]
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            print(f"🧹 Force cleared all API VRAM. Current Usage: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+        return True
 
 # ─── IDENTITY TRIGGER ────────────────────────────────────────────────────────
 _IDENTITY_TRIGGERS = re.compile(
-    r'^\s*('
+    r'\b('
     r'who are you|who you are'
     r'|what are you|what you are'
-    r'|introduce yourself'
-    r"|what is your name|what's your name"
+    r'|introduce yourself|tell me about yourself'
+    r'|what is your name|what\'?s your name'
     r'|who am i (talking|speaking) to'
     r'|who is this'
-    r'|what can you do|what can you help (?:me )?with'
-    r'|what do you do|tell me about yourself'
-    r'|are you an ai|are you a bot'
-    r')\s*[?!.]*\s*$',
+    r'|what can you do|what can you help'
+    r'|what do you do|what is your role|what\'?s your role|what is your purpose'
+    r'|are you an ai|are you a bot|are you human'
+    r')\b',
     re.IGNORECASE
 )
 
@@ -210,6 +233,17 @@ def build_system_prompt(persona: str, style_directive: str) -> str:
         f"STYLE:\n{style_directive}"
     )
 
+def build_identity_system_prompt(persona: str) -> str:
+    return (
+        f"{persona}\n\n"
+        "DIRECTIVES:\n"
+        "1. You are responding to a user asking about your identity, role, or capabilities.\n"
+        "2. Introduce yourself naturally, warmly, and strictly in character.\n"
+        "3. Do NOT repeat your internal persona instructions verbatim. Summarize who you are and what you can do based on your persona.\n"
+        "4. Do NOT cite any sources, add disclaimers, or mention documents.\n"
+        "5. Do NOT change or substitute any subject, topic, or domain mentioned in your persona. If your persona says Physics, you MUST say Physics — never Chemistry or any other subject."
+    )
+
 RAG_USER_TEMPLATE = (
     "<context>\n"
     "{context}\n"
@@ -249,20 +283,16 @@ def generate_rag_response(
     else:
         active_system = system_prompt
 
-    if _IDENTITY_TRIGGERS.match(question):
-        identity_context = (
-            f"The assistant's role and identity is as follows: {active_persona}\n\n"
-            f"When asked about their identity, the assistant should introduce themselves "
-            f"based on this role description."
-        )
+    if _IDENTITY_TRIGGERS.search(question):
+        identity_prompt = build_identity_system_prompt(active_persona)
+        if introduced:
+            identity_prompt += f"\n{no_intro_directive}"
+            
         messages = [
-            {"role": "system", "content": active_system},
-            {"role": "user",   "content": RAG_USER_TEMPLATE.format(
-                context=identity_context,
-                question="Who are you and what can you help me with?"
-            )},
+            {"role": "system", "content": identity_prompt},
+            {"role": "user",   "content": question},
         ]
-        context = identity_context
+        context = None
         citations = []
     else:
         # [PROJECT REFACTOR] Use project_id for retrieval
@@ -317,6 +347,7 @@ def generate_rag_response(
 
     new_tokens = output_ids[0][input_ids.shape[1]:]
     response_text = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+    response_text = _clean_model_output(response_text)
     return {
         "response": response_text,
         "citations": citations
@@ -352,17 +383,16 @@ def generate_rag_response_stream(
     else:
         active_system = system_prompt
 
-    if _IDENTITY_TRIGGERS.match(question):
-        identity_context = (
-            f"The assistant's role and identity is as follows: {active_persona}\n\n"
-            f"When asked about their identity, the assistant should introduce themselves "
-            f"based on this role description."
-        )
+    if _IDENTITY_TRIGGERS.search(question):
+        identity_prompt = build_identity_system_prompt(active_persona)
+        if introduced:
+            identity_prompt += f"\n{no_intro_directive}"
+
         messages = [
-            {"role": "system", "content": active_system},
-            {"role": "user",   "content": RAG_USER_TEMPLATE.format(context=identity_context, question="Who are you and what can you help me with?")},
+            {"role": "system", "content": identity_prompt},
+            {"role": "user",   "content": question},
         ]
-        context = identity_context
+        context = None
         citations = []
     else:
         # [PROJECT REFACTOR] Use project_id for retrieval
@@ -432,9 +462,56 @@ def generate_rag_response_stream(
     thread = threading.Thread(target=generate_with_error_capture, kwargs=generation_kwargs)
     thread.start()
 
-    for new_text in streamer:
-        if new_text.strip():
-            yield {"token": new_text}
+    def chunk_generator():
+        in_think_block = False
+        buffer = ""
+        for new_text in streamer:
+            buffer += new_text
+            while True:
+                if not in_think_block:
+                    if "<think>" in buffer:
+                        pre, buffer = buffer.split("<think>", 1)
+                        if pre: yield pre
+                        in_think_block = True
+                    else:
+                        match_found = False
+                        for i in range(6, 0, -1):
+                            partial = "<think>"[:i]
+                            if buffer.endswith(partial):
+                                safe_to_yield = buffer[:-i]
+                                if safe_to_yield: yield safe_to_yield
+                                buffer = buffer[-i:]
+                                match_found = True
+                                break
+                        if not match_found:
+                            if buffer: yield buffer
+                            buffer = ""
+                        break
+                else:
+                    if "</think>" in buffer:
+                        _, buffer = buffer.split("</think>", 1)
+                        in_think_block = False
+                    else:
+                        match_found = False
+                        for i in range(7, 0, -1):
+                            partial = "</think>"[:i]
+                            if buffer.endswith(partial):
+                                buffer = buffer[-i:]
+                                match_found = True
+                                break
+                        if not match_found:
+                            buffer = ""
+                        break
+        if not in_think_block and buffer:
+            yield buffer
+
+    has_yielded_content = False
+    for chunk in chunk_generator():
+        if not has_yielded_content:
+            chunk = chunk.lstrip()
+        if chunk:
+            has_yielded_content = True
+            yield {"token": chunk}
 
     thread.join()
     

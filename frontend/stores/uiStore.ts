@@ -6,6 +6,7 @@ interface UIState {
   theme: 'dark' | 'light';
   toasts: Toast[];
   activeModal: string | null;
+  unreadNotifications: boolean;
 
   toggleSidebar: () => void;
   setTheme: (theme: 'dark' | 'light') => void;
@@ -13,6 +14,7 @@ interface UIState {
   removeToast: (id: string) => void;
   openModal: (modalId: string) => void;
   closeModal: () => void;
+  setUnreadNotifications: (unread: boolean) => void;
 }
 
 export const useUIStore = create<UIState>((set, get) => ({
@@ -20,6 +22,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   theme: 'dark',
   toasts: [],
   activeModal: null,
+  unreadNotifications: false,
 
   toggleSidebar: () => {
     set((state) => ({ sidebarExpanded: !state.sidebarExpanded }));
@@ -56,5 +59,9 @@ export const useUIStore = create<UIState>((set, get) => ({
 
   closeModal: () => {
     set({ activeModal: null });
+  },
+
+  setUnreadNotifications: (unread) => {
+    set({ unreadNotifications: unread });
   },
 }));

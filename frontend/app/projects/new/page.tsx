@@ -50,7 +50,7 @@ const defaultWizardData: WizardData = {
   ],
   files: [],
   textInput: '',
-  selectedModel: 'llama-3.2-1b',
+  selectedModel: 'qwen3-1.7b',
   hyperparameters: {
     epochs: 3,
     learningRate: 0.0002,
@@ -79,11 +79,11 @@ export default function NewProjectPage() {
       let nextModel = prev.selectedModel;
       if (data.useCase !== prev.useCase) {
         if (['medical'].includes(data.useCase)) {
-          nextModel = 'phi-3-mini';
+          nextModel = 'phi-3.5-mini';
         } else if (['finance', 'legal'].includes(data.useCase)) {
-          nextModel = 'gemma-2-2b';
+          nextModel = 'qwen3-4b';
         } else {
-          nextModel = 'llama-3.2-1b';
+          nextModel = 'qwen3-1.7b';
         }
       }
       return { ...prev, ...data, selectedModel: nextModel };
@@ -149,6 +149,11 @@ export default function NewProjectPage() {
     if (!projectId) return;
 
     setIsSubmitting(true);
+
+    // Request OS notification permission so we can alert when training finishes in the background
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
 
     const tryStartTraining = async () => {
       try {

@@ -353,4 +353,13 @@ def run_finetuning_pipeline(job_id: str, use_case: str, hyperparameters: dict = 
         "training_history": epoch_history,
     }
 
+    # 7. Aggressively clear memory to free VRAM for the Inference API
+    import gc
+    del model
+    del tokenizer
+    del trainer
+    gc.collect()
+    torch.cuda.empty_cache()
+    print("🧹 Worker VRAM cleared successfully.")
+
     return metrics

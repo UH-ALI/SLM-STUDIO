@@ -3,6 +3,7 @@ import { Inter, JetBrains_Mono } from 'next/font/google';
 import './globals.css';
 import { QueryClientProvider } from '@/components/QueryClientProvider';
 import { AuthProvider } from '@/components/AuthProvider';
+import { GlobalJobPoller } from '@/components/organisms/GlobalJobPoller';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -65,6 +66,7 @@ export default function RootLayout({
 
         <QueryClientProvider>
           <AuthProvider>
+            <GlobalJobPoller />
             {children}
           </AuthProvider>
         </QueryClientProvider>

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app import models, schemas
-from app.ai.rag_inference import generate_rag_response, generate_rag_response_stream, unload_model
+from app.ai.rag_inference import generate_rag_response, generate_rag_response_stream, unload_model, free_all_memory
 
 from app.core.deps import get_current_user
 from app.core.config import settings
@@ -329,3 +329,15 @@ def unload_job_model(
             else "Model was not in the VRAM cache (already unloaded or never loaded)."
         )
     }
+
+@router.delete("/system/vram", tags=["System"])
+def clear_all_vram(secret: str):
+    """
+    Force clear ALL cached models from VRAM.
+    Used by the Celery Worker before starting a memory-intensive training job.
+    """
+    if secret != settings.SECRET_KEY:
+        raise HTTPException(status_code=401, detail="Invalid internal secret")
+    
+    free_all_memory()
+    return {"message": "All API VRAM cleared successfully."}

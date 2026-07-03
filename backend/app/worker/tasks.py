@@ -8,7 +8,8 @@ from app.models import TrainingJob, Dataset, JobStatus, ModelArtifact, Project
 # Import our decoupled AI modules
 from app.ai.rag_ingestion import process_and_ingest_document
 from app.ai.data_generator import generate_finetuning_data
-
+from app.core.config import settings
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,21 @@ def train_model_task(self, project_id: str, job_id: str):
         _write_log(db, job.id, "INFO", "Phase 3: Fine-tuning model with QLoRA")
         # [DATA SOVEREIGNTY FIX] Generic log message
         logger.info("[Celery Worker] Phase 3: Fine-tuning model")
+
+        # ─── VRAM CLEARANCE SIGNAL ───────────────────────────────────────────
+        # Before loading the heavy model for training, we MUST tell the API container 
+        # to drop any active inference models from VRAM. Otherwise, the 8GB GPU will crash.
+        try:
+            # We use the docker compose service name "api" internally.
+            # For local dev without docker, this might fail, but it's okay, we catch it.
+            api_url = "http://api:8000/api/v1/system/vram"
+            resp = requests.delete(api_url, params={"secret": settings.SECRET_KEY}, timeout=5)
+            if resp.status_code == 200:
+                logger.info("[Celery Worker] Successfully cleared API VRAM cache.")
+            else:
+                logger.warning(f"[Celery Worker] API VRAM clear returned {resp.status_code}.")
+        except Exception as e:
+            logger.warning(f"[Celery Worker] Could not contact API to clear VRAM (safe to ignore if running locally): {e}")
 
         # [PROJECT REFACTOR] Pass base_model_name from Project
         finetune_results = run_finetuning_pipeline(

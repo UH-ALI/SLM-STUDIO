@@ -2,6 +2,7 @@ import { Bell, Plus } from 'lucide-react';
 import { classNames } from '@/lib/utils';
 import { Button } from '@/components/atoms/Button';
 import { useRouter } from 'next/navigation';
+import { useUIStore } from '@/stores/uiStore';
 
 interface PageHeaderProps {
   title: string;
@@ -17,6 +18,11 @@ export function PageHeader({
   className,
 }: PageHeaderProps) {
   const router = useRouter();
+  const { unreadNotifications, setUnreadNotifications } = useUIStore();
+
+  const handleBellClick = () => {
+    setUnreadNotifications(false);
+  };
 
   return (
     <div
@@ -37,14 +43,18 @@ export function PageHeader({
       <div className="flex items-center gap-3">
         <button
           className={classNames(
-            'w-10 h-10 rounded-button flex items-center justify-center',
+            'relative w-10 h-10 rounded-button flex items-center justify-center',
             'bg-[#121B16]/60 border border-white/[0.08] text-fern',
             'hover:text-ivory hover:border-gold/30 transition-all duration-300',
             'focus-visible:outline-2 focus-visible:outline-gold focus-visible:outline-offset-2'
           )}
           aria-label="Notifications"
+          onClick={handleBellClick}
         >
           <Bell size={18} />
+          {unreadNotifications && (
+            <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border border-[#121B16]" />
+          )}
         </button>
 
         {showNewProject && (

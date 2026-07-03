@@ -19,9 +19,9 @@ interface WizardConfigureProps {
 }
 
 const models = [
-  { name: 'Llama 3.2 1B', description: 'Fast, lightweight instruct model', value: 'llama-3.2-1b' },
-  { name: 'Gemma 2 2B', description: 'Reasoning-heavy instruct model', value: 'gemma-2-2b' },
-  { name: 'Phi 3 Mini', description: 'Precision-critical instruct model', value: 'phi-3-mini' },
+  { name: 'Qwen3 1.7B', description: 'Fast and lightweight — ideal for education & general use', value: 'qwen3-1.7b' },
+  { name: 'Qwen3 4B', description: 'Stronger reasoning — ideal for business, finance & legal', value: 'qwen3-4b' },
+  { name: 'Phi-3.5 Mini', description: 'High precision — ideal for medical & scientific domains', value: 'phi-3.5-mini' },
 ];
 
 export function WizardConfigure({

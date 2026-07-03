@@ -34,9 +34,6 @@ export function useChatStream(projectId: string | null | undefined): UseChatStre
     setIsStreaming(true);
     setError(null);
 
-    // Placeholder assistant message — filled in token-by-token below.
-    setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
-
     const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
     try {
@@ -92,14 +89,14 @@ export function useChatStream(projectId: string | null | undefined): UseChatStre
           }
 
           if (data.token) {
-            // Immutable update: build a new array and a new last-message object
-            // rather than mutating the previous message in place, which the
-            // earlier version did via `lastMsg.content += data.token`.
             setMessages((prev) => {
               const last = prev[prev.length - 1];
-              if (!last || last.role !== 'assistant') return prev;
-              const updatedLast: Message = { ...last, content: last.content + data.token };
-              return [...prev.slice(0, -1), updatedLast];
+              if (last && last.role === 'assistant') {
+                  const updatedLast: Message = { ...last, content: last.content + data.token };
+                  return [...prev.slice(0, -1), updatedLast];
+              } else {
+                  return [...prev, { role: 'assistant', content: data.token || '' }];
+              }
             });
           }
 
@@ -111,7 +108,9 @@ export function useChatStream(projectId: string | null | undefined): UseChatStre
             }));
             setMessages((prev) => {
               const last = prev[prev.length - 1];
-              if (!last || last.role !== 'assistant') return prev;
+              if (!last || last.role !== 'assistant') {
+                 return [...prev, { role: 'assistant', content: '', citations }];
+              }
               const updatedLast: Message = { ...last, citations };
               return [...prev.slice(0, -1), updatedLast];
             });
