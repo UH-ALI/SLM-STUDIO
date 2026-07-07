@@ -242,7 +242,7 @@ export function PlaygroundLayout() {
 
         {/* Right sidebar */}
         <div className="hidden lg:flex lg:col-span-3 flex-col gap-4 min-h-0">
-          <TestPrompts onPromptClick={handleTestPrompt} />
+          <TestPrompts projectId={jobId} onPromptClick={handleTestPrompt} />
           <div className="flex-1 glass-card overflow-y-auto">
             <h3 className="text-sm font-semibold text-ivory mb-3">Sources</h3>
             {latestCitations.length === 0 && (

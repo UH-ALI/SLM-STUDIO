@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { HelpCircle, BookOpen, User } from 'lucide-react';
 import { classNames } from '@/lib/utils';
 import type { LucideIcon } from 'lucide-react';
@@ -34,12 +34,61 @@ const testPrompts: TestPrompt[] = [
 ];
 
 interface TestPromptsProps {
+  projectId: string;
   onPromptClick: (prompt: string) => void;
   className?: string;
 }
 
-export function TestPrompts({ onPromptClick, className }: TestPromptsProps) {
+export function TestPrompts({ projectId, onPromptClick, className }: TestPromptsProps) {
   const [typingIndex, setTypingIndex] = useState<number | null>(null);
+  const [prompts, setPrompts] = useState<TestPrompt[]>(testPrompts);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchPrompts() {
+      try {
+        const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+        const res = await fetch(`${apiBaseUrl}/inference/projects/${projectId}/sample_prompts`, {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem('slm_token') || ''}`,
+          },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setPrompts([
+            {
+              label: 'Ask a factual question',
+              icon: HelpCircle,
+              prompt: data.factual,
+              description: 'Test knowledge retrieval',
+            },
+            {
+              label: 'Ask something not in docs',
+              icon: BookOpen,
+              prompt: data.negative,
+              description: 'Test general knowledge',
+            },
+            {
+              label: 'Ask who you are',
+              icon: User,
+              prompt: data.persona,
+              description: 'Test persona adherence',
+            },
+          ]);
+        }
+      } catch (err) {
+        console.error("Failed to fetch sample prompts", err);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    
+    if (projectId) {
+      fetchPrompts();
+    } else {
+      setIsLoading(false);
+    }
+  }, [projectId]);
 
   const handleClick = (prompt: string, index: number) => {
     setTypingIndex(index);
@@ -64,8 +113,15 @@ export function TestPrompts({ onPromptClick, className }: TestPromptsProps) {
       <p className="text-[0.65rem] font-semibold uppercase tracking-[0.08em] text-muted mb-3">
         Try these prompts
       </p>
-      {testPrompts.map((tp, index) => {
-        const Icon = tp.icon;
+      {isLoading ? (
+        <div className="space-y-2 animate-pulse">
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="w-full h-[60px] rounded-xl bg-white/[0.02] border border-white/[0.04]"></div>
+          ))}
+        </div>
+      ) : (
+        prompts.map((tp, index) => {
+          const Icon = tp.icon;
         const isTyping = typingIndex === index;
 
         return (
@@ -96,7 +152,8 @@ export function TestPrompts({ onPromptClick, className }: TestPromptsProps) {
             </div>
           </button>
         );
-      })}
+      })
+      )}
     </div>
   );
 }
