@@ -1,6 +1,9 @@
+import asyncio
+import json
 import queue
 import os
 import re
+import time
 import torch
 import warnings
 import logging
@@ -10,11 +13,15 @@ from sentence_transformers import SentenceTransformer
 import chromadb
 import threading
 from transformers import TextIteratorStreamer
+import redis
+from app.core.config import settings
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", message=".*max_new_tokens.*max_length.*")
 warnings.filterwarnings("ignore", message=".*warmup_ratio.*deprecated.*")
 transformers.logging.set_verbosity_error()
+
+logger = logging.getLogger(__name__)
 
 # ─── QWEN3 OUTPUT CLEANING ──────────────────────────────────────────────────
 _THINK_BLOCK = re.compile(r'<think>.*?</think>', re.DOTALL)
@@ -31,21 +38,44 @@ def _clean_model_output(text: str) -> str:
 # --- HARDWARE DETECTOR ---
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
+# ─── REDIS CLIENT (reuse Celery broker connection) ──────────────────────────
+_redis_client = redis.Redis.from_url(settings.CELERY_BROKER_URL, decode_responses=True)
+
 # ─── CONFIG ──────────────────────────────────────────────────────────────────
 TOP_K               = 5
 MAX_NEW_TOKENS      = 512
-MAX_SEQ_LEN         = 4096
+MAX_SEQ_LEN         = 3072           # [P1.4] Aligned with training (was 4096)
 RELEVANCE_THRESHOLD = 0.45
+ADAPTIVE_THRESHOLD  = 0.55           # [P1.5] Adaptive upper bound for borderline chunks
 
-# ─── CACHE LIMITS (H2) ─────────────────────────────────────────────────────────
-MAX_CACHED_MODELS      = 3
+# ─── DOMAIN-AWARE TEMPERATURE DEFAULTS (§3.2) ───────────────────────────────
+DEFAULT_TEMPERATURE_BY_USE_CASE = {
+    "medical":   0.15,
+    "legal":     0.15,
+    "finance":   0.2,
+    "business":  0.3,
+    "education": 0.35,
+    "general":   0.3,
+}
+
+# ─── CACHE LIMITS ────────────────────────────────────────────────────────────
 MAX_CACHED_COLLECTIONS = 5
 
-# ─── FASTAPI ACTIVE CACHE (LRU) ───────────────────────────────────────────────
-ACTIVE_MODELS      = OrderedDict()  # { job_id: (model, tokenizer) }
-ACTIVE_COLLECTIONS = OrderedDict()  # { project_id: collection }
+# ─── TWO-TIER VRAM CACHE (P0.1) ─────────────────────────────────────────────
+# Tier 1: Base model cache — keyed by HF model slug (e.g., "unsloth/Qwen3-1.7B-bnb-4bit")
+# Tier 2: Adapter registry — tracks which LoRA adapters are mounted on which base model
+ACTIVE_BASE_MODELS = OrderedDict()   # { base_model_slug: (model, tokenizer) }
+ACTIVE_ADAPTERS    = {}              # { job_id: base_model_slug }
+ACTIVE_COLLECTIONS = OrderedDict()   # { project_id: collection }
 _cache_lock = threading.Lock()
 _embedder = None
+
+# ─── PER-MODEL INFERENCE MUTEX (P0.2) ───────────────────────────────────────
+# Prevents concurrent model.generate() calls which corrupt KV-cache on shared GPU
+_inference_lock = threading.Lock()
+# Track how many active inference requests are in-flight (for graceful draining)
+_active_inference_count = 0
+_active_inference_count_lock = threading.Lock()
 
 
 def get_embedder():
@@ -80,65 +110,172 @@ def get_or_load_collection(project_id: str):
         return collection
 
 
+def _read_adapter_base_model(adapter_path: str) -> str:
+    """Read the base_model_name_or_path from an adapter's config."""
+    config_path = os.path.join(adapter_path, "adapter_config.json")
+    if os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            config = json.load(f)
+        return config.get("base_model_name_or_path", "")
+    return ""
+
+
+def _wait_for_gpu_ready():
+    """
+    [P0.3] Block until GPU is available (not training/draining).
+    Returns True when ready, raises TimeoutError after 10 minutes.
+    """
+    max_wait = 600  # 10 minutes max wait
+    waited = 0
+    while waited < max_wait:
+        gpu_state = _redis_client.get("gpu:state")
+        if gpu_state in (None, "idle", ""):
+            return True
+        logger.info(f"GPU busy (state={gpu_state}), waiting... ({waited}s)")
+        time.sleep(2.0)
+        waited += 2
+    raise TimeoutError("GPU did not become available within 10 minutes.")
+
+
 def get_or_load_model(job_id: str):
-    """LRU cache for fine-tuned models in GPU VRAM."""
-    global ACTIVE_MODELS
+    """
+    [P0.1] Two-Tier VRAM Cache: Base Model + Dynamic LoRA Adapter Swapping.
+    
+    Instead of loading a full copy of the base model per adapter, we:
+    1. Check which base model the adapter needs (from adapter_config.json)
+    2. Load the base model ONCE into VRAM if not already cached
+    3. Mount/swap the LoRA adapter on top (<50ms) without reloading the base
+    
+    [P0.3] Also checks Redis gpu:state — waits if training is active.
+    """
+    global ACTIVE_BASE_MODELS, ACTIVE_ADAPTERS
+
+    # [P0.3] Wait for GPU to be available (not training/draining)
+    _wait_for_gpu_ready()
+
+    adapter_path = f"data/adapters/job_{job_id}"
+    if not os.path.exists(adapter_path):
+        raise ValueError("Adapter not found. Has training completed?")
+
+    try:
+        from unsloth import FastLanguageModel
+    except ImportError:
+        raise RuntimeError('Unsloth is not installed.')
+
     with _cache_lock:
-        if job_id in ACTIVE_MODELS:
-            ACTIVE_MODELS.move_to_end(job_id)
-            return ACTIVE_MODELS[job_id]
-        if len(ACTIVE_MODELS) >= MAX_CACHED_MODELS:
-            oldest_id, _ = ACTIVE_MODELS.popitem(last=False)
-            print("  Evicted model cache from VRAM")
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                print(f"  VRAM freed. Current: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
-        adapter_path = f"data/adapters/job_{job_id}"
-        if not os.path.exists(adapter_path):
-            raise ValueError("Adapter not found. Has training completed?")
-        print("\n  Loading fine-tuned model into VRAM...")
-        try:
-            from unsloth import FastLanguageModel
-        except ImportError:
-            raise RuntimeError('Unsloth is not installed. Please install it with: pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"')
-        model, tokenizer = FastLanguageModel.from_pretrained(
-            model_name=adapter_path,
-            max_seq_length=MAX_SEQ_LEN,
-            dtype=None,
-            load_in_4bit=True,
-            local_files_only=True,
-        )
-        FastLanguageModel.for_inference(model)
-        ACTIVE_MODELS[job_id] = (model, tokenizer)
-        print(f"  Model cached. VRAM: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
-        return ACTIVE_MODELS[job_id]
+        # Determine which base model this adapter needs
+        base_slug = _read_adapter_base_model(adapter_path)
+        if not base_slug:
+            # Fallback: load directly from adapter path (legacy behavior)
+            base_slug = adapter_path
+
+        # --- Tier 1: Base Model Cache ---
+        if base_slug in ACTIVE_BASE_MODELS:
+            model, tokenizer = ACTIVE_BASE_MODELS[base_slug]
+            ACTIVE_BASE_MODELS.move_to_end(base_slug)
+            logger.info(f"  Base model cache hit: {base_slug}")
+        else:
+            # Load fresh base model into VRAM
+            logger.info(f"  Loading base model into VRAM: {base_slug}")
+            model, tokenizer = FastLanguageModel.from_pretrained(
+                model_name=adapter_path,
+                max_seq_length=MAX_SEQ_LEN,
+                dtype=None,
+                load_in_4bit=True,
+                local_files_only=True,
+            )
+            FastLanguageModel.for_inference(model)
+            ACTIVE_BASE_MODELS[base_slug] = (model, tokenizer)
+            logger.info(f"  Base model cached. VRAM: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+
+        # --- Tier 2: LoRA Adapter Swap ---
+        if ACTIVE_ADAPTERS.get(job_id) != base_slug:
+            # This adapter is not yet the active one on this base model
+            try:
+                # Try fast adapter swap (<50ms)
+                model.set_adapter(job_id)
+                logger.info(f"  Adapter swap (set_adapter): {job_id} (<50ms)")
+            except (ValueError, KeyError):
+                # Adapter not yet mounted — load it first
+                try:
+                    from peft import PeftModel
+                    if not isinstance(model, PeftModel):
+                        # First adapter load on a fresh base model
+                        model, tokenizer = FastLanguageModel.from_pretrained(
+                            model_name=adapter_path,
+                            max_seq_length=MAX_SEQ_LEN,
+                            dtype=None,
+                            load_in_4bit=True,
+                            local_files_only=True,
+                        )
+                        FastLanguageModel.for_inference(model)
+                        ACTIVE_BASE_MODELS[base_slug] = (model, tokenizer)
+                    else:
+                        model.load_adapter(adapter_path, adapter_name=job_id)
+                        model.set_adapter(job_id)
+                    logger.info(f"  Adapter mounted + activated: {job_id}")
+                except Exception as e:
+                    # Final fallback: load adapter path directly
+                    logger.warning(f"  Adapter swap failed ({e}), loading directly")
+                    model, tokenizer = FastLanguageModel.from_pretrained(
+                        model_name=adapter_path,
+                        max_seq_length=MAX_SEQ_LEN,
+                        dtype=None,
+                        load_in_4bit=True,
+                        local_files_only=True,
+                    )
+                    FastLanguageModel.for_inference(model)
+                    ACTIVE_BASE_MODELS[base_slug] = (model, tokenizer)
+
+            ACTIVE_ADAPTERS[job_id] = base_slug
+
+        return (model, tokenizer)
 
 
-# ─── H8: MANUAL VRAM UNLOAD ─────────────────────────────────────────────────
+# ─── MANUAL VRAM UNLOAD ─────────────────────────────────────────────────────
 def unload_model(job_id: str) -> bool:
-    global ACTIVE_MODELS
+    global ACTIVE_BASE_MODELS, ACTIVE_ADAPTERS
     with _cache_lock:
-        if job_id not in ACTIVE_MODELS:
+        base_slug = ACTIVE_ADAPTERS.pop(job_id, None)
+        if base_slug is None:
             return False
-        del ACTIVE_MODELS[job_id]
+        # Only unload base model if no other adapters reference it
+        remaining = [k for k, v in ACTIVE_ADAPTERS.items() if v == base_slug]
+        if not remaining and base_slug in ACTIVE_BASE_MODELS:
+            del ACTIVE_BASE_MODELS[base_slug]
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-            print(f"  Manually unloaded model. VRAM: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
-        else:
-            print("  Manually unloaded model (CPU mode)")
+            logger.info(f"  Manually unloaded adapter {job_id}. VRAM: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
         return True
 
 def free_all_memory() -> bool:
     """Forcefully drop ALL cached models from VRAM (used by Worker before training)."""
-    global ACTIVE_MODELS
+    global ACTIVE_BASE_MODELS, ACTIVE_ADAPTERS
+    import gc
     with _cache_lock:
-        keys = list(ACTIVE_MODELS.keys())
-        for k in keys:
-            del ACTIVE_MODELS[k]
+        ACTIVE_BASE_MODELS.clear()
+        ACTIVE_ADAPTERS.clear()
+        gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-            print(f"🧹 Force cleared all API VRAM. Current Usage: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+            logger.info(f"🧹 Force cleared all API VRAM. Current Usage: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
         return True
+
+
+# ─── INFERENCE COUNT TRACKING (for graceful draining) ────────────────────────
+def _increment_inference_count():
+    global _active_inference_count
+    with _active_inference_count_lock:
+        _active_inference_count += 1
+
+def _decrement_inference_count():
+    global _active_inference_count
+    with _active_inference_count_lock:
+        _active_inference_count = max(0, _active_inference_count - 1)
+
+def get_active_inference_count() -> int:
+    with _active_inference_count_lock:
+        return _active_inference_count
 
 # ─── IDENTITY TRIGGER ────────────────────────────────────────────────────────
 _IDENTITY_TRIGGERS = re.compile(
@@ -199,14 +336,17 @@ def retrieve_context(project_id: str, query: str):
     if not results["distances"] or not results["distances"][0]:
         return None, None
         
-    if min(results["distances"][0]) > RELEVANCE_THRESHOLD:
+    if min(results["distances"][0]) > ADAPTIVE_THRESHOLD:
         return None, None
     chunks    = results["documents"][0]
     metadatas = results["metadatas"][0]
     distances = results["distances"][0]
+    best_dist = min(distances)
+    # [P1.5] Adaptive threshold: if best chunk is close (< 0.45), allow others up to 0.55
+    effective_threshold = ADAPTIVE_THRESHOLD if best_dist <= RELEVANCE_THRESHOLD else RELEVANCE_THRESHOLD
     context_blocks, citations = [], []
     for chunk, meta, dist in zip(chunks, metadatas, distances):
-        if dist > RELEVANCE_THRESHOLD:
+        if dist > effective_threshold:
             continue
         source  = meta.get("source", "document")
         chapter = meta.get("chapter", "")
@@ -332,18 +472,24 @@ def generate_rag_response(
 
     actual_new_tokens = min(MAX_NEW_TOKENS, max(available_tokens, 20))
 
-    with torch.no_grad():
-        output_ids = model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            max_new_tokens=actual_new_tokens,
-            temperature=temperature if temperature > 0.05 else None,
-            do_sample=temperature > 0.05,
-            top_p=0.9,
-            repetition_penalty=1.15,
-            no_repeat_ngram_size=4,
-            pad_token_id=tokenizer.eos_token_id,
-        )
+    # [P0.2] Acquire inference mutex to prevent concurrent KV-cache corruption
+    _increment_inference_count()
+    try:
+      with _inference_lock:
+        with torch.no_grad():
+            output_ids = model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=actual_new_tokens,
+                temperature=temperature if temperature > 0.05 else None,
+                do_sample=temperature > 0.05,
+                top_p=0.9,
+                repetition_penalty=1.05,       # [P1.3] Relaxed from 1.15 for cleaner output
+                # [P1.3] Removed no_repeat_ngram_size=4 — was blocking trained refusal phrases
+                pad_token_id=tokenizer.eos_token_id,
+            )
+    finally:
+        _decrement_inference_count()
 
     new_tokens = output_ids[0][input_ids.shape[1]:]
     response_text = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
@@ -442,22 +588,27 @@ def generate_rag_response_stream(
         "temperature": temperature if temperature > 0.05 else None,
         "do_sample": temperature > 0.05,
         "top_p": 0.9,
-        "repetition_penalty": 1.15,
-        "no_repeat_ngram_size": 4,
+        "repetition_penalty": 1.05,        # [P1.3] Relaxed from 1.15
+        # [P1.3] Removed no_repeat_ngram_size=4
         "pad_token_id": tokenizer.eos_token_id,
         "streamer": streamer,
     }
 
     # [BUG #19 FIX] Surface thread exceptions
+    # [P0.2] Wrap generation in inference mutex to prevent concurrent KV-cache corruption
     err_queue = queue.Queue()
     def generate_with_error_capture(**kwargs):
+        _increment_inference_count()
         try:
-            model.generate(**kwargs)
+            with _inference_lock:
+                model.generate(**kwargs)
         except Exception as e:
             err_queue.put(e)
             # Unblock the streamer queue so it doesn't hang forever
             if hasattr(streamer, 'text_queue'):
                 streamer.text_queue.put(streamer.stop_signal)
+        finally:
+            _decrement_inference_count()
 
     thread = threading.Thread(target=generate_with_error_capture, kwargs=generation_kwargs)
     thread.start()

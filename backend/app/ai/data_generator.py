@@ -167,8 +167,27 @@ def _is_grounded(chunk: str, output: str) -> bool:
         return False
 
     overlap = sum(1 for w in output_words if w in chunk_words)
-    # [BUG #14 FIX] Require at least 40% of significant words to overlap, with a minimum of 2
-    return (overlap / len(output_words)) > 0.40 and overlap >= 2
+    word_overlap_pass = (overlap / len(output_words)) > 0.40 and overlap >= 2
+
+    if not word_overlap_pass:
+        return False
+
+    # [P2.1] Embedding-based semantic grounding check (§3.3)
+    # Reuses the already-loaded SentenceTransformer — zero additional VRAM cost
+    try:
+        from app.ai.rag_inference import get_embedder
+        embedder = get_embedder()
+        embeddings = embedder.encode([chunk[:1000], output], normalize_embeddings=True)
+        cosine_sim = float(embeddings[0] @ embeddings[1])
+        if cosine_sim < 0.5:
+            logging.getLogger(__name__).debug(
+                f"Grounding filter: cosine_sim={cosine_sim:.3f} < 0.5 — rejected paraphrased hallucination"
+            )
+            return False
+    except Exception:
+        pass  # If embedder unavailable, fall back to word-overlap result only
+
+    return True
 
 def dynamic_pair_count(chunk: str) -> int:
     words = len(chunk.split())

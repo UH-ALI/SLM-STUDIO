@@ -10,8 +10,13 @@ from app.ai.rag_ingestion import process_and_ingest_document
 from app.ai.data_generator import generate_finetuning_data
 from app.core.config import settings
 import requests
+import redis
+import time
 
 logger = logging.getLogger(__name__)
+
+# [P0.4] Redis client for GPU state coordination
+_redis_client = redis.Redis.from_url(settings.CELERY_BROKER_URL, decode_responses=True)
 
 
 def _write_log(db, job_id, level, message):
@@ -152,20 +157,44 @@ def train_model_task(self, project_id: str, job_id: str):
         # [DATA SOVEREIGNTY FIX] Generic log message
         logger.info("[Celery Worker] Phase 3: Fine-tuning model")
 
-        # ─── VRAM CLEARANCE SIGNAL ───────────────────────────────────────────
-        # Before loading the heavy model for training, we MUST tell the API container 
-        # to drop any active inference models from VRAM. Otherwise, the 8GB GPU will crash.
-        try:
-            # We use the docker compose service name "api" internally.
-            # For local dev without docker, this might fail, but it's okay, we catch it.
-            api_url = "http://api:8000/api/v1/system/vram"
-            resp = requests.delete(api_url, params={"secret": settings.SECRET_KEY}, timeout=5)
-            if resp.status_code == 200:
-                logger.info("[Celery Worker] Successfully cleared API VRAM cache.")
-            else:
-                logger.warning(f"[Celery Worker] API VRAM clear returned {resp.status_code}.")
-        except Exception as e:
-            logger.warning(f"[Celery Worker] Could not contact API to clear VRAM (safe to ignore if running locally): {e}")
+        # ─── VRAM CLEARANCE SIGNAL (P0.4: Request Draining + Fail-Closed) ────────
+        # Step 1: Signal "draining" so new inference requests wait instead of loading models
+        _redis_client.set("gpu:state", "draining", ex=30)
+        _write_log(db, job.id, "INFO", "GPU state: draining — waiting for active inference to complete")
+        logger.info("[Celery Worker] GPU state set to 'draining'. Waiting for active inference...")
+
+        # Step 2: Wait up to 5 seconds for any in-flight inference to finish
+        from app.ai.rag_inference import get_active_inference_count
+        for _ in range(10):  # 10 x 0.5s = 5s max
+            if get_active_inference_count() == 0:
+                break
+            time.sleep(0.5)
+
+        # Step 3: Clear VRAM with fail-closed handshake (§4.3)
+        _redis_client.set("gpu:state", "training", ex=600)  # 10 min TTL safety net
+        vram_cleared = False
+        for attempt in range(2):  # retry once on failure
+            try:
+                api_url = "http://api:8000/api/v1/system/vram"
+                resp = requests.delete(api_url, params={"secret": settings.SECRET_KEY}, timeout=5)
+                if resp.status_code == 200:
+                    logger.info("[Celery Worker] Successfully cleared API VRAM cache.")
+                    vram_cleared = True
+                    break
+                else:
+                    logger.warning(f"[Celery Worker] API VRAM clear returned {resp.status_code} (attempt {attempt+1}).")
+            except Exception as e:
+                logger.warning(f"[Celery Worker] Could not contact API to clear VRAM (attempt {attempt+1}): {e}")
+            if attempt == 0:
+                time.sleep(1.0)  # backoff before retry
+
+        # [§4.3 Fail-Closed] If VRAM clear failed after retry, abort training safely
+        if not vram_cleared:
+            error_msg = "VRAM clearance failed after 2 attempts — aborting training to prevent OOM crash."
+            logger.error(f"[Celery Worker] {error_msg}")
+            _write_log(db, job.id, "ERROR", error_msg)
+            _redis_client.delete("gpu:state")
+            raise RuntimeError(error_msg)
 
         # [PROJECT REFACTOR] Pass base_model_name from Project
         finetune_results = run_finetuning_pipeline(
@@ -237,4 +266,10 @@ def train_model_task(self, project_id: str, job_id: str):
         raise e
 
     finally:
+        # [P0.4] ALWAYS clear gpu:state flag so inference can resume, even on failure
+        try:
+            _redis_client.delete("gpu:state")
+            logger.info("[Celery Worker] GPU state cleared — inference can resume.")
+        except Exception:
+            pass
         db.close()

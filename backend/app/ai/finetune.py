@@ -40,7 +40,7 @@ BASE_MODEL_ALIASES = {
     "phi-3.5-mini": "unsloth/Phi-3.5-mini-instruct-bnb-4bit",
 }
 
-MAX_SEQ_LEN   = 2048
+MAX_SEQ_LEN   = 3072            # [P1.1] Aligned with inference (was 2048)
 EPOCHS        = 3
 BATCH_SIZE    = 1
 GRAD_ACC      = 8
@@ -283,13 +283,19 @@ def run_finetuning_pipeline(job_id: str, use_case: str, hyperparameters: dict = 
             except Exception as e:
                 print(f"Failed to update DB on epoch end: {e}")
 
+    from transformers import EarlyStoppingCallback  # [P1.1]
+
     trainer = SFTTrainer(
         model=model,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,       # ← pass eval split
         processing_class=tokenizer,
         args=training_args,
-        callbacks=[MemoryClearCallback(), EpochUpdateCallback()],
+        callbacks=[
+            MemoryClearCallback(),
+            EpochUpdateCallback(),
+            EarlyStoppingCallback(early_stopping_patience=1),  # [P1.1] Stop if eval_loss stops improving
+        ],
     )
 
     # 4. Execute Training

@@ -1,10 +1,13 @@
 import os
 import re
+import logging
 from pathlib import Path
 import chromadb
 from sentence_transformers import SentenceTransformer
 import pymupdf4llm
 from markitdown import MarkItDown
+
+logger = logging.getLogger(__name__)
 
 # ─── CONFIG & REGEX (From AI Team) ───────────────────────────────────────────
 CHUNK_SIZE    = 1500   # soft target in characters
@@ -205,7 +208,11 @@ def process_and_ingest_document(project_id: str, dataset_id: str, file_path: str
     MAX_CHUNKS_PER_PROJECT = 2500  # ~350-500 pages of dense text
     total = collection.count()
     if total > MAX_CHUNKS_PER_PROJECT:
-        print(f"⚠️  Project has {total} chunks. Consider splitting into multiple projects.")
+        # [P2.3] Surface as proper warning instead of silent print
+        logger.warning(
+            f"Project has {total} chunks (limit: {MAX_CHUNKS_PER_PROJECT}). "
+            "Consider splitting into multiple projects for optimal retrieval quality."
+        )
 
-    print(f"Vector store ready — {len(docs)} chunks saved to {chroma_dir}.")
+    logger.info(f"Vector store ready — {len(docs)} chunks saved to {chroma_dir}.")
     return True
