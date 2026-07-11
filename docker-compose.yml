@@ -1,0 +1,155 @@
+services:
+
+  # ─── DATABASE ────────────────────────────────────────────────────────────────
+  # PostgreSQL stores all persistent data — users, datasets, jobs, artifacts.
+  # Named volume (postgres_data) ensures DB survives container restarts.
+  # Credentials come from .env (see .env.example) — never hardcode them here.
+  db:
+    image: postgres:15.7
+    container_name: slm_postgres
+    restart: always
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ─── MESSAGE QUEUE ───────────────────────────────────────────────────────────
+  # Redis acts as the Celery broker (holds task queue) and backend (stores results).
+  # The API pushes jobs here, the worker picks them up.
+  redis:
+    image: redis:7.4
+    container_name: slm_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ─── API SERVER ──────────────────────────────────────────────────────────────
+  # FastAPI backend — handles all HTTP requests from the frontend.
+  # GPU access is required here because inference (RAG + model generation)
+  # runs directly in this container when a chat request comes in.
+  # Both API and worker share the GPU — safe for FYP demo since training
+  # and inference are never triggered at exactly the same time.
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: slm_api
+    restart: always
+    ports:
+      - "8000:8000"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    env_file:
+      - .env
+    volumes:
+      - ./backend:/app                  # live reload — code changes reflect instantly
+      - ./backend/data:/app/data        # uploaded files, vector stores, adapters persist here
+      - ~/.cache/huggingface:/root/.cache/huggingface  # Cache HF models and tokenizers on the host to avoid re-downloading in the container
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    # GPU access — needed for Unsloth inference (get_or_load_model in rag_inference.py)
+    # Shares the GPU with the worker — fine as long as training and inference
+    # are not triggered simultaneously (safe for demo/FYP use).
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # ─── CELERY WORKER ───────────────────────────────────────────────────────────
+  # Background task processor — runs RAG ingestion and fine-tuning jobs.
+  # Uses the same image as the API but starts with a different command.
+  #
+  # --pool=solo   → runs tasks in the main process without forking.
+  #                 REQUIRED for CUDA — PyTorch cannot re-initialize the GPU
+  #                 in a forked subprocess. solo pool avoids this entirely.
+  #
+  # --concurrency=1 → only one task runs at a time.
+  #                   Unsloth + QLoRA is GPU-bound — two concurrent tasks
+  #                   would OOM-kill each other on the GPU.
+  #
+  # --prefetch-multiplier=1 → worker only fetches one task at a time from Redis.
+  #                            Prevents a second task being reserved while
+  #                            the GPU is still busy with the first one.
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: slm_worker
+    restart: always
+    command: >
+      celery -A app.worker.celery_app.celery_app worker
+      --loglevel=info
+      --pool=solo
+      --concurrency=1
+      --prefetch-multiplier=1
+    env_file:
+      - .env
+    volumes:
+      - ./backend:/app                  # same codebase as api
+      - ./backend/data:/app/data        # worker writes adapters here — must match api mount
+      - ~/.cache/huggingface:/root/.cache/huggingface  # Share HF cache with API container
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # GPU access — required for Unsloth fine-tuning and QLoRA training.
+    # Run setup.sh first to install nvidia-container-toolkit on the host.
+    # Remove this deploy block entirely if running on a CPU-only machine.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # ─── FRONTEND ─────────────────────────────────────────────────────────────────
+  # Next.js app — talks to the API container over the docker network at build/run
+  # time via NEXT_PUBLIC_API_URL. Exposed on 3000 for the browser.
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+    container_name: slm_frontend
+    restart: always
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+# ─── NAMED VOLUMES ───────────────────────────────────────────────────────────
+# postgres_data → persists the entire PostgreSQL database across restarts.
+# Without this, all users, jobs, and metadata are deleted on container stop.
+volumes:
+  postgres_data:
