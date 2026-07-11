@@ -175,7 +175,7 @@ def train_model_task(self, project_id: str, job_id: str):
         vram_cleared = False
         for attempt in range(2):  # retry once on failure
             try:
-                api_url = "http://api:8000/api/v1/system/vram"
+                api_url = "http://api:8000/api/v1/inference/system/vram"
                 resp = requests.delete(api_url, params={"secret": settings.SECRET_KEY}, timeout=5)
                 if resp.status_code == 200:
                     logger.info("[Celery Worker] Successfully cleared API VRAM cache.")

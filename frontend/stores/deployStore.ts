@@ -3,6 +3,11 @@ import api from '@/lib/api';
 
 export interface WidgetConfig {
   primaryColor: string;
+  bodyColor: string;
+  dotsColor: string;
+  botMessageColor: string;
+  userMessageColor: string;
+  chatInputColor: string;
   position: 'bottom-right' | 'bottom-left';
   greeting: string;
   title?: string | null;

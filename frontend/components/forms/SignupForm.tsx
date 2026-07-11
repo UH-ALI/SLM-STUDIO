@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { UserPlus } from 'lucide-react';
+import { UserPlus, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/atoms/Button';
 import { useAuthStore } from '@/stores/authStore';
 import { useUIStore } from '@/stores/uiStore';
@@ -23,6 +23,8 @@ export function SignupForm() {
   const { login } = useAuthStore();
   const { addToast } = useUIStore();
   const [isLoading, setIsLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [formData, setFormData] = useState<SignupFormData>({
@@ -195,30 +197,48 @@ export function SignupForm() {
       {/* Password */}
       <div>
         <label className="block text-xs font-semibold text-void/80 mb-1.5">Password</label>
-        <input
-          type="password"
-          name="password"
-          value={formData.password}
-          onChange={handleChange}
-          onBlur={handleBlur}
-          placeholder="Min 8 characters"
-          className={inputClass('password')}
-        />
+        <div className="relative">
+          <input
+            type={showPassword ? "text" : "password"}
+            name="password"
+            value={formData.password}
+            onChange={handleChange}
+            onBlur={handleBlur}
+            placeholder="Min 8 characters"
+            className={`${inputClass('password')} pr-10`}
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword(!showPassword)}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-void transition-colors"
+          >
+            {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </div>
         {errors.password && <p className="mt-1 text-xs text-rose">{errors.password}</p>}
       </div>
 
       {/* Confirm Password */}
       <div>
         <label className="block text-xs font-semibold text-void/80 mb-1.5">Confirm Password</label>
-        <input
-          type="password"
-          name="confirmPassword"
-          value={formData.confirmPassword}
-          onChange={handleChange}
-          onBlur={handleBlur}
-          placeholder="Repeat password"
-          className={inputClass('confirmPassword')}
-        />
+        <div className="relative">
+          <input
+            type={showConfirmPassword ? "text" : "password"}
+            name="confirmPassword"
+            value={formData.confirmPassword}
+            onChange={handleChange}
+            onBlur={handleBlur}
+            placeholder="Repeat password"
+            className={`${inputClass('confirmPassword')} pr-10`}
+          />
+          <button
+            type="button"
+            onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-void transition-colors"
+          >
+            {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </div>
         {errors.confirmPassword && (
           <p className="mt-1 text-xs text-rose">{errors.confirmPassword}</p>
         )}

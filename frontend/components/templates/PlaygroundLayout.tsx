@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Upload, User, Rocket, X, Plus, ChevronRight, FileText, RefreshCw, Lock } from "lucide-react";
+import { useUIStore } from '@/stores/uiStore';
 import { ChatInterface } from "@/components/organisms/ChatInterface";
 import { TestPrompts } from "@/components/organisms/TestPrompts";
 import { CitationPanel } from "@/components/organisms/CitationPanel";
@@ -31,7 +32,15 @@ export function PlaygroundLayout() {
 
   // Route param is named "id" but is actually the projectId — the playground
   // page lives at /projects/[id]/playground, and chat is project-scoped.
-  const { messages, isStreaming, sendMessage } = useChatStream(jobId);
+  const { messages, isStreaming, sendMessage, error } = useChatStream(jobId);
+  const { addToast } = useUIStore();
+
+  useEffect(() => {
+    if (error) {
+      addToast({ type: 'error', message: error });
+    }
+  }, [error, addToast]);
+
   const [showCitations, setShowCitations] = useState(false);
   const [activePanel, setActivePanel] = useState<SidePanel>("none");
   const [persona] = useState(

@@ -227,18 +227,25 @@ class JobLogResponse(BaseModel):
 
 class WidgetConfig(BaseModel):
     primary_color: str = Field(default="#4F46E5", alias="primaryColor")
+    body_color: str = Field(default="#F8F9FB", alias="bodyColor")
+    dots_color: str = Field(default="#9CA3AF", alias="dotsColor")
+    bot_message_color: str = Field(default="#FFFFFF", alias="botMessageColor")
+    user_message_color: str = Field(default="", alias="userMessageColor")
+    chat_input_color: str = Field(default="#FFFFFF", alias="chatInputColor")
     position: Literal["bottom-right", "bottom-left"] = "bottom-right"
     greeting: str = Field(default="Hi! Ask me anything.", max_length=300)
     title: Optional[str] = Field(default=None, max_length=80)
 
     model_config = ConfigDict(populate_by_name=True)
 
-    @field_validator("primary_color")
+    @field_validator("primary_color", "body_color", "dots_color", "bot_message_color", "user_message_color", "chat_input_color")
     @classmethod
     def validate_hex_color(cls, v: str) -> str:
+        if v == "":
+            return v  # Allow empty string (means "use default/primary")
         import re
         if not re.fullmatch(r"#[0-9A-Fa-f]{6}", v):
-            raise ValueError("primaryColor must be a 6-digit hex color, e.g. #4F46E5")
+            raise ValueError("Color must be a 6-digit hex color, e.g. #4F46E5")
         return v
 
 
@@ -275,6 +282,11 @@ class PublicWidgetConfigResponse(BaseModel):
     title: str
     greeting: str
     primary_color: str = Field(alias="primaryColor")
+    body_color: str = Field(alias="bodyColor")
+    dots_color: str = Field(alias="dotsColor")
+    bot_message_color: str = Field(alias="botMessageColor")
+    user_message_color: str = Field(alias="userMessageColor")
+    chat_input_color: str = Field(alias="chatInputColor")
     position: str
 
     model_config = ConfigDict(populate_by_name=True)

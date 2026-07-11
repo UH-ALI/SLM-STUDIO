@@ -27,7 +27,7 @@ export function useChatStream(projectId: string | null | undefined): UseChatStre
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const sendMessage = useCallback(async (content: string, introduced = false) => {
-    if (!content.trim() || !projectId) return;
+    if (!content.trim() || !projectId || isStreaming) return;
 
     const userMessage: Message = { role: 'user', content };
     setMessages((prev) => [...prev, userMessage]);
@@ -125,7 +125,7 @@ export function useChatStream(projectId: string | null | undefined): UseChatStre
       setIsStreaming(false);
       abortControllerRef.current = null;
     }
-  }, [projectId]);
+  }, [projectId, isStreaming]);
 
   return { messages, isStreaming, sendMessage, error };
 }

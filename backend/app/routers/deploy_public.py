@@ -70,6 +70,11 @@ def get_public_widget_config(deploy_key: str, db: Session = Depends(get_db)):
         "title": cfg.get("title") or project.name,
         "greeting": cfg.get("greeting", "Hi! Ask me anything."),
         "primaryColor": cfg.get("primaryColor", "#4F46E5"),
+        "bodyColor": cfg.get("bodyColor", "#F8F9FB"),
+        "dotsColor": cfg.get("dotsColor", "#9CA3AF"),
+        "botMessageColor": cfg.get("botMessageColor", "#FFFFFF"),
+        "userMessageColor": cfg.get("userMessageColor", ""),
+        "chatInputColor": cfg.get("chatInputColor", "#FFFFFF"),
         "position": cfg.get("position", "bottom-right"),
     }
 

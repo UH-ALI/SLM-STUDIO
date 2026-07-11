@@ -40,7 +40,6 @@ interface TestPromptsProps {
 }
 
 export function TestPrompts({ projectId, onPromptClick, className }: TestPromptsProps) {
-  const [typingIndex, setTypingIndex] = useState<number | null>(null);
   const [prompts, setPrompts] = useState<TestPrompt[]>(testPrompts);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -90,22 +89,8 @@ export function TestPrompts({ projectId, onPromptClick, className }: TestPrompts
     }
   }, [projectId]);
 
-  const handleClick = (prompt: string, index: number) => {
-    setTypingIndex(index);
-
-    // Simulate typewriter effect then send
-    let currentText = '';
-    const chars = prompt.split('');
-
-    chars.forEach((char, i) => {
-      setTimeout(() => {
-        currentText += char;
-        if (i === chars.length - 1) {
-          setTypingIndex(null);
-          onPromptClick(prompt);
-        }
-      }, i * 30);
-    });
+  const handleClick = (prompt: string) => {
+    onPromptClick(prompt);
   };
 
   return (
@@ -120,21 +105,17 @@ export function TestPrompts({ projectId, onPromptClick, className }: TestPrompts
           ))}
         </div>
       ) : (
-        prompts.map((tp, index) => {
+        prompts.map((tp) => {
           const Icon = tp.icon;
-        const isTyping = typingIndex === index;
-
         return (
           <button
             key={tp.label}
-            onClick={() => !isTyping && handleClick(tp.prompt, index)}
-            disabled={isTyping}
+            onClick={() => handleClick(tp.prompt)}
             className={classNames(
               'w-full text-left p-3 rounded-xl',
               'bg-[#121B16]/60 border border-white/[0.06]',
               'hover:border-gold/20 hover:bg-gold/[0.03] transition-all duration-300',
-              'focus-visible:outline-2 focus-visible:outline-gold',
-              isTyping && 'opacity-70 cursor-wait'
+              'focus-visible:outline-2 focus-visible:outline-gold'
             )}
           >
             <div className="flex items-center gap-2.5">

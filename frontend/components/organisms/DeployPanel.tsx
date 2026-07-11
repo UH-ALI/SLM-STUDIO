@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Copy, Pause, Play, RotateCcw, Zap, Check, AlertTriangle } from 'lucide-react';
+import { Copy, Pause, Play, RotateCcw, Zap, Check, AlertTriangle, Palette } from 'lucide-react';
 import { classNames } from '@/lib/utils';
 import { Badge } from '@/components/atoms/Badge';
 import { Button } from '@/components/atoms/Button';
-import { useDeployStore } from '@/stores/deployStore';
+import { useDeployStore, WidgetConfig } from '@/stores/deployStore';
 import { useProjectStore } from '@/stores/projectStore';
 import { useUIStore } from '@/stores/uiStore';
 
@@ -26,12 +26,32 @@ export function DeployPanel({ projectId, className }: DeployPanelProps) {
   const [copied, setCopied] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [originInput, setOriginInput] = useState('');
+  const [isUpdatingConfig, setIsUpdatingConfig] = useState(false);
+
+  // Widget appearance customization state
+  const [widgetConfig, setWidgetConfig] = useState<Partial<WidgetConfig>>({
+    primaryColor: '#4F46E5',
+    bodyColor: '#F8F9FB',
+    dotsColor: '#9CA3AF',
+    botMessageColor: '#FFFFFF',
+    userMessageColor: '',
+    chatInputColor: '#FFFFFF',
+    title: '',
+    greeting: 'Hi! Ask me anything.',
+  });
 
   useEffect(() => {
     fetchProject(projectId).catch(() => {});
     fetchConfig(projectId).catch(() => {});
     fetchUsage(projectId).catch(() => {});
   }, [projectId, fetchProject, fetchConfig, fetchUsage]);
+
+  // Sync widgetConfig state when config loads from server
+  useEffect(() => {
+    if (config?.widgetConfig) {
+      setWidgetConfig((prev) => ({ ...prev, ...config.widgetConfig }));
+    }
+  }, [config?.widgetConfig]);
 
   const handleCopy = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
@@ -109,6 +129,18 @@ export function DeployPanel({ projectId, className }: DeployPanelProps) {
     }
   };
 
+  const handleUpdateWidgetConfig = async () => {
+    setIsUpdatingConfig(true);
+    try {
+      await enableDeploy(projectId, { widgetConfig });
+      addToast({ type: 'success', message: 'Widget appearance updated' });
+    } catch {
+      addToast({ type: 'error', message: 'Failed to update widget appearance' });
+    } finally {
+      setIsUpdatingConfig(false);
+    }
+  };
+
   const isTrained = activeProject?.status === 'completed';
   const isPublic = config?.isPublic ?? false;
 
@@ -140,6 +172,28 @@ export function DeployPanel({ projectId, className }: DeployPanelProps) {
       </div>
     );
   }
+
+  // Color input helper
+  const colorField = (label: string, key: keyof WidgetConfig, placeholder = '#000000') => (
+    <div>
+      <label className="block text-xs text-fern mb-1.5">{label}</label>
+      <div className="flex items-center gap-2">
+        <input
+          type="color"
+          value={(widgetConfig[key] as string) || placeholder}
+          onChange={(e) => setWidgetConfig((prev) => ({ ...prev, [key]: e.target.value }))}
+          className="w-8 h-8 rounded-lg border border-white/[0.06] cursor-pointer bg-transparent p-0"
+        />
+        <input
+          type="text"
+          value={(widgetConfig[key] as string) || ''}
+          onChange={(e) => setWidgetConfig((prev) => ({ ...prev, [key]: e.target.value }))}
+          placeholder={placeholder}
+          className="flex-1 bg-[#121B16]/60 border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-ivory font-mono placeholder:text-muted outline-none focus:border-gold/40"
+        />
+      </div>
+    </div>
+  );
 
   return (
     <div className={classNames('space-y-6', className)}>
@@ -225,6 +279,58 @@ export function DeployPanel({ projectId, className }: DeployPanelProps) {
           </p>
         </div>
       )}
+
+      {/* Widget Appearance Customization */}
+      <div className="glass-card">
+        <div className="flex items-center gap-2 mb-4">
+          <Palette size={16} className="text-gold" />
+          <h3 className="text-sm font-semibold text-ivory">Widget Appearance</h3>
+        </div>
+
+        <div className="space-y-4">
+          {/* Text Fields */}
+          <div>
+            <label className="block text-xs text-fern mb-1.5">Widget Title</label>
+            <input
+              type="text"
+              value={widgetConfig.title || ''}
+              onChange={(e) => setWidgetConfig((prev) => ({ ...prev, title: e.target.value }))}
+              placeholder={activeProject?.name || 'My Bot'}
+              className="w-full bg-[#121B16]/60 border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-ivory placeholder:text-muted outline-none focus:border-gold/40"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-fern mb-1.5">Greeting Message</label>
+            <input
+              type="text"
+              value={widgetConfig.greeting || ''}
+              onChange={(e) => setWidgetConfig((prev) => ({ ...prev, greeting: e.target.value }))}
+              placeholder="Hi! Ask me anything."
+              className="w-full bg-[#121B16]/60 border border-white/[0.06] rounded-lg px-3 py-2 text-sm text-ivory placeholder:text-muted outline-none focus:border-gold/40"
+            />
+          </div>
+
+          {/* Color Fields */}
+          <div className="grid grid-cols-2 gap-4">
+            {colorField('Widget Title Bar Color', 'primaryColor', '#4F46E5')}
+            {colorField('Chat Background Color', 'bodyColor', '#F8F9FB')}
+            {colorField('Typing Indicator Dots', 'dotsColor', '#9CA3AF')}
+            {colorField('Bot Message Bubble', 'botMessageColor', '#FFFFFF')}
+            {colorField('User Message Bubble', 'userMessageColor', '#4F46E5')}
+            {colorField('Message Input Area', 'chatInputColor', '#FFFFFF')}
+          </div>
+
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleUpdateWidgetConfig}
+            disabled={isUpdatingConfig}
+            className="w-full"
+          >
+            {isUpdatingConfig ? 'Saving…' : 'Save Appearance'}
+          </Button>
+        </div>
+      </div>
 
       {/* Allowed Origins — opt-in restriction; empty list means any site can embed */}
       <div className="glass-card">

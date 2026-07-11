@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { LogIn } from 'lucide-react';
+import { LogIn, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/atoms/Button';
 import { useAuthStore } from '@/stores/authStore';
 import { useUIStore } from '@/stores/uiStore';
@@ -19,6 +19,7 @@ export function LoginForm() {
   const { login } = useAuthStore();
   const { addToast } = useUIStore();
   const [isLoading, setIsLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formData, setFormData] = useState<LoginFormData>({
     username: '',
@@ -96,13 +97,22 @@ export function LoginForm() {
         <label className="block text-xs font-semibold text-void/80 mb-1.5">
           Password
         </label>
-        <input
-          type="password"
-          value={formData.password}
-          onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-          placeholder="••••••••"
-          className="w-full bg-white/60 border border-void/10 rounded-button px-3.5 py-2.5 text-sm text-void placeholder:text-muted focus:outline-none focus:border-gold/50 transition-colors"
-        />
+        <div className="relative">
+          <input
+            type={showPassword ? "text" : "password"}
+            value={formData.password}
+            onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+            placeholder="••••••••"
+            className="w-full bg-white/60 border border-void/10 rounded-button px-3.5 py-2.5 text-sm text-void placeholder:text-muted focus:outline-none focus:border-gold/50 transition-colors pr-10"
+          />
+          <button
+            type="button"
+            onClick={() => setShowPassword(!showPassword)}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-void transition-colors"
+          >
+            {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+        </div>
         {errors.password && (
           <p className="mt-1 text-xs text-rose">{errors.password}</p>
         )}

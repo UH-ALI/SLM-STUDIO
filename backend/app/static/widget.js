@@ -24,7 +24,7 @@
   }
 
   /* ───── State ───── */
-  let config = { title: "Assistant", greeting: "Hi! Ask me anything.", primaryColor: "#4F46E5", position: "bottom-right" };
+  let config = { title: "Assistant", greeting: "Hi! Ask me anything.", primaryColor: "#4F46E5", bodyColor: "#F8F9FB", dotsColor: "#9CA3AF", botMessageColor: "#FFFFFF", userMessageColor: "", chatInputColor: "#FFFFFF", position: "bottom-right" };
   let isOpen = false;
   let messages = [];
   let isStreaming = false;
@@ -71,6 +71,12 @@
     const panelSide = config.position === "bottom-left" ? "left: 20px;" : "right: 20px;";
     const pc = config.primaryColor;
     const pcDark = darken(pc, 12);
+    const bodyBg = config.bodyColor || "#F8F9FB";
+    const dotsBg = config.dotsColor || pc;
+    const botBubbleBg = config.botMessageColor || "#FFFFFF";
+    const userBubbleBg = config.userMessageColor || pc;
+    const userBubbleDark = darken(userBubbleBg, 12);
+    const inputBg = config.chatInputColor || "#FFFFFF";
 
     shadow.innerHTML = `
       <style>
@@ -117,7 +123,7 @@
 
         .body {
           flex: 1; overflow-y: auto; padding: 16px;
-          background: #f8f9fb;
+          background: ${bodyBg};
           scroll-behavior: smooth;
         }
         .body::-webkit-scrollbar { width: 5px; }
@@ -144,12 +150,12 @@
           border-radius: 14px;
         }
         .msg-row.bot .msg-bubble {
-          background: #fff; color: #1a1a1a;
+          background: ${botBubbleBg}; color: #1a1a1a;
           border: 1px solid #e8e8e8;
           border-bottom-left-radius: 4px;
         }
         .msg-row.user .msg-bubble {
-          background: linear-gradient(135deg, ${pc}, ${pcDark});
+          background: linear-gradient(135deg, ${userBubbleBg}, ${userBubbleDark});
           color: #fff;
           border-bottom-right-radius: 4px;
         }
@@ -166,7 +172,7 @@
         .typing { display: flex; align-items: center; gap: 4px; padding: 10px 14px; }
         .typing-dot {
           width: 8px; height: 8px; border-radius: 50%;
-          background: ${pc}60;
+          background: ${dotsBg};
           animation: typingBounce 1.2s ease-in-out infinite;
         }
         .typing-dot:nth-child(2) { animation-delay: 0.15s; }
@@ -178,7 +184,7 @@
 
         .input-row {
           display: flex; align-items: center;
-          border-top: 1px solid #eee; background: #fff;
+          border-top: 1px solid #eee; background: ${inputBg};
           padding: 8px 12px; gap: 8px; flex-shrink: 0;
         }
         .input-row input {
