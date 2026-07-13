@@ -31,7 +31,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
           'text-sm leading-relaxed whitespace-pre-wrap',
           isUser ? 'text-ivory' : 'text-ivory/90'
         )}>
-          {message.content}
+          {message.content.replace(/\[?[Ss]ources?:?\s*(\[.*?\]|[^.\n\]]+\]?)/g, '').trim()}
         </p>
 
         {/* Citations */}

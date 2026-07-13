@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app import models, schemas
-from app.ai.rag_inference import generate_rag_response, generate_rag_response_stream, unload_model, free_all_memory
+from app.ai.rag_inference import generate_rag_response, generate_rag_response_stream, unload_model, free_all_memory, prewarm_model_async
 
 from app.core.deps import get_current_user
 from app.core.config import settings
@@ -403,11 +403,11 @@ def get_sample_prompts(
     negative = random.choice(negative_questions) if negative_questions else "What does the author say about space travel?"
     
     persona_questions = [
+        "Who are you?",
         "Who are you and what is your role?",
-        "What are your core responsibilities?",
-        "Can you describe your persona?",
-        "What kind of assistant are you?",
-        "Tell me about your guidelines."
+        "What is your role as an assistant?",
+        "Introduce yourself.",
+        "What can you help me with?"
     ]
     persona = random.choice(persona_questions)
 
@@ -416,3 +416,21 @@ def get_sample_prompts(
         "negative": negative,
         "persona": persona
     }
+
+
+@router.post("/projects/{project_id}/prewarm", status_code=status.HTTP_202_ACCEPTED)
+def prewarm_project_model(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Pre-warm base model and adapter into VRAM when user enters Playground."""
+    project = (
+        db.query(models.Project)
+        .filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        .first()
+    )
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    prewarm_model_async(project_id)
+    return {"status": "prewarming", "project_id": project_id}

@@ -105,9 +105,16 @@ export function SignupForm() {
       await login(formData.email, formData.password);
       addToast({ type: 'success', message: 'Account created successfully!' });
       router.push('/dashboard');
-    } catch {
-      setErrors({ general: 'Registration failed. Please try again.' });
-      addToast({ type: 'error', message: 'Signup failed. Try again.' });
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail || 'Registration failed. Please try again.';
+      if (detail.toLowerCase().includes('username')) {
+        setErrors({ username: detail });
+      } else if (detail.toLowerCase().includes('email')) {
+        setErrors({ email: detail });
+      } else {
+        setErrors({ general: detail });
+      }
+      addToast({ type: 'error', message: detail });
     } finally {
       setIsLoading(false);
     }

@@ -88,6 +88,10 @@ export function WizardSetup({ data, onChange, onContinue }: WizardSetupProps) {
   };
 
   const handleAddExample = () => {
+    const lastEx = data.fewShotExamples[data.fewShotExamples.length - 1];
+    if (lastEx && lastEx.question.trim() && !lastEx.answer.trim()) {
+      return;
+    }
     onChange({
       ...data,
       fewShotExamples: [...data.fewShotExamples, { question: '', answer: '' }],
@@ -99,16 +103,24 @@ export function WizardSetup({ data, onChange, onContinue }: WizardSetupProps) {
     onChange({ ...data, fewShotExamples: updated });
   };
 
+  const allFewShotsValid = data.fewShotExamples.every(
+    (ex) => !ex.question.trim() || ex.answer.trim().length > 0
+  );
+
   const canContinue = 
     data.name.trim().length > 0 && 
     role.trim().length > 0 && 
     behavior.trim().length > 0 && 
-    boundary.trim().length > 0;
+    boundary.trim().length > 0 &&
+    allFewShotsValid;
 
   const handleContinueClick = () => {
     const nextErrors: Record<string, string> = {};
     if (!data.name.trim()) {
       nextErrors.name = 'Project name is required';
+    }
+    if (!allFewShotsValid) {
+      nextErrors.fewShot = 'If you enter a question for a few-shot example, you must also provide its answer.';
     }
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length === 0) {
@@ -233,6 +245,7 @@ export function WizardSetup({ data, onChange, onContinue }: WizardSetupProps) {
           <Plus size={14} />
           Add Example
         </button>
+        {errors.fewShot && <p className="text-xs text-rose mt-2">{errors.fewShot}</p>}
       </div>
 
       {/* Continue */}

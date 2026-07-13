@@ -133,8 +133,8 @@ export function ProjectCard({ project, onMenuAction, className }: ProjectCardPro
                 'bg-elevated border border-white/[0.08] shadow-glass'
               )}>
                 {(project.status === 'failed'
-                  ? ['retry', 'rename', 'duplicate', 'delete']
-                  : ['rename', 'duplicate', 'delete']
+                  ? ['retry', 'rename', 'delete']
+                  : ['rename', 'delete']
                 ).map((action) => (
                   <button
                     key={action}

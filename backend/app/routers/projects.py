@@ -1,4 +1,5 @@
 import os
+import shutil
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
@@ -131,6 +132,42 @@ def get_project(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found or unauthorized")
     return project
+
+
+# ─── DELETE SINGLE PROJECT ──────────────────────────────────────────────────
+@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Deletes a project from the database and removes disk files (adapters, vector stores, datasets)."""
+    project = (
+        db.query(models.Project)
+        .filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        .first()
+    )
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found or unauthorized")
+
+    # Clean up disk folders (adapters use job_<project_id>, vector stores use project_<project_id>)
+    base_data = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data")
+    for pattern in [
+        f"adapters/job_{project_id}",
+        f"vector_stores/project_{project_id}",
+        f"vector_stores/dataset_{project_id}",
+    ]:
+        folder_path = os.path.join(base_data, pattern)
+        if os.path.exists(folder_path):
+            shutil.rmtree(folder_path, ignore_errors=True)
+
+    # Clear M:M association before deleting (avoids FK constraint on project_datasets)
+    project.datasets.clear()
+    db.flush()
+
+    db.delete(project)
+    db.commit()
+    return None
 
 
 # ─── UPLOAD DATASETS TO PROJECT ──────────────────────────────────────────────

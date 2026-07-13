@@ -27,8 +27,10 @@ logger = logging.getLogger(__name__)
 _THINK_BLOCK = re.compile(r'<think>.*?</think>', re.DOTALL)
 
 def _clean_model_output(text: str) -> str:
-    """Strip Qwen3 <think> reasoning blocks and normalize whitespace."""
+    """Strip Qwen3 <think> reasoning blocks, source tags, and normalize whitespace."""
     text = _THINK_BLOCK.sub('', text)
+    # Strip in-text Source/citation tags like [Source: ...], source:[], Source: [...]
+    text = re.sub(r'\[?[Ss]ources?:?\s*(\[.*?\]|[^.\n\]]+\]?)', '', text)
     # Fix merged words: insert space before uppercase letters that follow lowercase
     text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
     # Collapse multiple spaces
@@ -262,6 +264,16 @@ def free_all_memory() -> bool:
         return True
 
 
+def prewarm_model_async(job_id: str):
+    """Pre-warm base model and adapter in a background thread to reduce latency on first chat."""
+    def _warm():
+        try:
+            get_or_load_model(job_id)
+        except Exception as e:
+            logger.warning(f"Pre-warm failed for {job_id}: {e}")
+    threading.Thread(target=_warm, daemon=True).start()
+
+
 # ─── INFERENCE COUNT TRACKING (for graceful draining) ────────────────────────
 def _increment_inference_count():
     global _active_inference_count
@@ -369,7 +381,7 @@ def build_system_prompt(persona: str, style_directive: str) -> str:
         "DIRECTIVES:\n"
         "1. You must answer the user's query based ONLY on the provided context.\n"
         '2. If the context does not contain the answer, reply EXACTLY with: "This information is not available in the provided document."\n'
-        "3. Append [Source: ...] to the facts you synthesize based on the context.\n\n"
+        "3. Do NOT include [Source: ...] brackets or citation tags inside your response text.\n\n"
         f"STYLE:\n{style_directive}"
     )
 
@@ -658,6 +670,8 @@ def generate_rag_response_stream(
 
     has_yielded_content = False
     for chunk in chunk_generator():
+        # Strip in-text Source/citation tags like [Source: ...], source:[], Source: [...]
+        chunk = re.sub(r'\[?[Ss]ources?:?\s*(\[.*?\]|[^.\n\]]+\]?)', '', chunk)
         if not has_yielded_content:
             chunk = chunk.lstrip()
         if chunk:

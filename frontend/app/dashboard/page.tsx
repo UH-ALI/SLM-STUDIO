@@ -40,20 +40,23 @@ class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasErr
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { projects, isLoading, fetchProjects } = useProjectStore();
+  const { projects, isLoading, fetchProjects, deleteProject } = useProjectStore();
   const { addToast } = useUIStore();
 
   useEffect(() => {
     fetchProjects();
   }, [fetchProjects]);
 
-  const handleProjectAction = (action: string, _project: { id: string }) => {
+  const handleProjectAction = async (action: string, project: { id: string }) => {
     if (action === 'delete') {
-      addToast({ type: 'info', message: 'Project deleted' });
+      try {
+        await deleteProject(project.id);
+        addToast({ type: 'success', message: 'Project deleted successfully' });
+      } catch (err) {
+        addToast({ type: 'error', message: 'Failed to delete project' });
+      }
     } else if (action === 'rename') {
       addToast({ type: 'info', message: 'Rename coming soon' });
-    } else if (action === 'duplicate') {
-      addToast({ type: 'info', message: 'Project duplicated' });
     }
   };
 

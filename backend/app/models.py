@@ -73,7 +73,8 @@ class Project(Base):
     # Relationships
     owner = relationship("User", back_populates="projects")
     datasets = relationship("Dataset", secondary=project_datasets, back_populates="projects")
-    jobs = relationship("TrainingJob", back_populates="project", order_by="TrainingJob.created_at")
+    jobs = relationship("TrainingJob", back_populates="project", order_by="TrainingJob.created_at", cascade="all, delete-orphan")
+    usage_records = relationship("DeploymentUsage", back_populates="project", cascade="all, delete-orphan")
 
 
 class User(Base):
@@ -172,9 +173,11 @@ class DeploymentUsage(Base):
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     usage_date = Column(Date, nullable=False)
     message_count = Column(Integer, default=0, nullable=False)
+
+    project = relationship("Project", back_populates="usage_records")
 
 
 class JobLog(Base):

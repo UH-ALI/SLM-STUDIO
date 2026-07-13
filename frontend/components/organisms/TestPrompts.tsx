@@ -28,7 +28,7 @@ const testPrompts: TestPrompt[] = [
   {
     label: 'Ask who you are',
     icon: User,
-    prompt: 'Who are you and what can you help me with?',
+    prompt: 'Who are you?',
     description: 'Test persona adherence',
   },
 ];

@@ -67,16 +67,20 @@ export function TeachExample({
 
       {/* Answer */}
       <div>
-        <label className="block text-xs text-fern mb-1">{answerLabel}</label>
+        <label className="block text-xs text-fern mb-1">
+          {answerLabel} {example.question.trim() && !example.answer.trim() && <span className="text-rose font-medium">(Required)</span>}
+        </label>
         <textarea
           value={example.answer}
           onChange={handleAnswerChange}
           placeholder={`Enter ${answerLabel.toLowerCase()}...`}
           rows={2}
           className={classNames(
-            'w-full bg-[#121B16]/60 border border-white/[0.08] rounded-button px-3 py-2 text-sm text-ivory placeholder:text-muted resize-none',
-            'transition-all duration-300 ease-brand',
-            'focus:outline-none focus:border-gold/40 focus:shadow-[0_0_0_3px_rgba(212,168,83,0.1)]'
+            'w-full bg-[#121B16]/60 rounded-button px-3 py-2 text-sm text-ivory placeholder:text-muted resize-none',
+            'transition-all duration-300 ease-brand focus:outline-none',
+            example.question.trim() && !example.answer.trim()
+              ? 'border border-rose/60 focus:border-rose'
+              : 'border border-white/[0.08] focus:border-gold/40 focus:shadow-[0_0_0_3px_rgba(212,168,83,0.1)]'
           )}
         />
       </div>

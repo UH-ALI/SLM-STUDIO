@@ -274,13 +274,17 @@
 
     let html = "";
     for (const m of messages) {
+      if (m.role === "bot" && !m.text && isStreaming) continue;
       html += `<div class="msg-row ${m.role}">`;
       if (m.role === "bot") html += `<div class="msg-avatar">${botSVG}</div>`;
-      html += `<div class="msg-bubble">${escapeHtml(m.text)}</div>`;
+      const cleanText = (m.text || "").replace(/\[?[Ss]ources?:?\s*(\[.*?\]|[^.\n\]]+\]?)/g, "").trim();
+      html += `<div class="msg-bubble">${escapeHtml(cleanText)}</div>`;
       html += `</div>`;
     }
 
-    if (isStreaming) {
+    const lastMsg = messages[messages.length - 1];
+    const showTyping = isStreaming && (!lastMsg || lastMsg.role !== "bot" || !lastMsg.text);
+    if (showTyping) {
       html += `<div class="msg-row bot"><div class="msg-avatar">${botSVG}</div><div class="typing"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div></div>`;
     }
 
@@ -381,7 +385,7 @@
     }
 
     isStreaming = false;
-    render();
+    renderMessages();
     const input2 = shadow.getElementById("slm-input");
     if (input2) input2.focus();
   }

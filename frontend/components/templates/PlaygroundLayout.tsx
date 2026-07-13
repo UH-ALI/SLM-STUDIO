@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Upload, User, Rocket, X, Plus, ChevronRight, FileText, RefreshCw, Lock } from "lucide-react";
 import { ChatInterface } from "@/components/organisms/ChatInterface";
 import { TestPrompts } from "@/components/organisms/TestPrompts";
@@ -9,18 +9,19 @@ import { PanelLeftOpen, PanelLeftClose } from "lucide-react";
 import { useChatStream } from "@/hooks/useChatStream";
 import { useParams, useRouter } from "next/navigation";
 import { classNames } from "@/lib/utils";
+import api from "@/lib/api";
 
 type SidePanel = "none" | "documents" | "persona";
 
 // Parse the combined persona string into 3 parts for display
 function parsePersonaDisplay(persona: string): { role: string; behavior: string; boundary: string } {
-  const roleMatch = persona.match(/Role:\s*([\s\S]*?)(?=\nBehavior:|$)/);
-  const behaviorMatch = persona.match(/Behavior:\s*([\s\S]*?)(?=\nBoundary:|$)/);
-  const boundaryMatch = persona.match(/Boundary:\s*([\s\S]*?)$/);
+  const roleMatch = persona.match(/Role:\s*([\s\S]*?)(?=\nBehavior:|$)/i);
+  const behaviorMatch = persona.match(/Behavior:\s*([\s\S]*?)(?=\nBoundary:|$)/i);
+  const boundaryMatch = persona.match(/Boundary:\s*([\s\S]*?)$/i);
   return {
-    role: roleMatch ? roleMatch[1].trim() : '',
+    role: roleMatch ? roleMatch[1].trim() : persona,
     behavior: behaviorMatch ? behaviorMatch[1].trim() : '',
-    boundary: boundaryMatch ? boundaryMatch[1].trim() : persona,
+    boundary: boundaryMatch ? boundaryMatch[1].trim() : '',
   };
 }
 
@@ -34,13 +35,38 @@ export function PlaygroundLayout() {
   const { messages, isStreaming, sendMessage } = useChatStream(jobId);
   const [showCitations, setShowCitations] = useState(false);
   const [activePanel, setActivePanel] = useState<SidePanel>("none");
-  const [persona] = useState(
-    "Role: You are a professional customer support assistant.\nBehavior: Be concise, friendly, and accurate. Always greet users warmly.\nBoundary: Do not provide legal or medical advice. Redirect off-topic questions politely.",
-  );
-  const [documents, setDocuments] = useState<string[]>([
-    "Customer Support QA.pdf",
-    "Reference Guide.docx",
-  ]);
+  const [persona, setPersona] = useState<string>("Loading project persona...");
+  const [documents, setDocuments] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!jobId) return;
+
+    // Task 8: Trigger adapter prewarm immediately in background
+    api.post(`/inference/projects/${jobId}/prewarm`).catch(() => {});
+
+    // Task 3: Fetch project dynamic persona & datasets
+    async function loadProjectDetails() {
+      try {
+        const res = await api.get(`/projects/${jobId}`);
+        if (res.data) {
+          setPersona(res.data.persona || "Default Project Persona");
+        }
+      } catch (err) {
+        console.error("Failed to load project details:", err);
+      }
+
+      try {
+        const datasetsRes = await api.get(`/projects/${jobId}/datasets`);
+        if (Array.isArray(datasetsRes.data)) {
+          setDocuments(datasetsRes.data.map((d: any) => d.name));
+        }
+      } catch (err) {
+        console.error("Failed to load datasets:", err);
+      }
+    }
+
+    loadProjectDetails();
+  }, [jobId]);
 
   const parsedPersona = parsePersonaDisplay(persona);
 
@@ -52,13 +78,30 @@ export function PlaygroundLayout() {
 
   const handleTestPrompt = (prompt: string) => sendMessage(prompt);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const [isUploading, setIsUploading] = useState(false);
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files) return;
-    Array.from(files).forEach((f) => {
-      setDocuments((prev) => [...prev, f.name]);
-    });
-    e.target.value = "";
+    if (!files || files.length === 0) return;
+
+    setIsUploading(true);
+    try {
+      const formData = new FormData();
+      Array.from(files).forEach((f) => formData.append("files", f));
+
+      const res = await api.post(`/projects/${jobId}/datasets`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      if (Array.isArray(res.data)) {
+        setDocuments((prev) => [...prev, ...res.data.map((d: any) => d.name)]);
+      }
+    } catch (err) {
+      console.error("Failed to upload documents:", err);
+    } finally {
+      setIsUploading(false);
+      e.target.value = "";
+    }
   };
 
   const removeDocument = (name: string) => {
@@ -148,15 +191,24 @@ export function PlaygroundLayout() {
           </div>
 
           {/* Upload new */}
-          <label className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-dashed border-white/[0.12] text-xs text-fern hover:text-ivory hover:border-gold/40 cursor-pointer transition-colors">
-            <Plus size={13} />
-            Add a document to extend knowledge
+          <label className={classNames(
+            "flex items-center gap-2 px-3 py-2.5 rounded-lg border border-dashed text-xs transition-colors",
+            isUploading
+              ? "border-gold/30 text-gold cursor-wait opacity-70"
+              : "border-white/[0.12] text-fern hover:text-ivory hover:border-gold/40 cursor-pointer"
+          )}>
+            {isUploading ? (
+              <><RefreshCw size={13} className="animate-spin" /> Uploading &amp; ingesting…</>
+            ) : (
+              <><Plus size={13} /> Add a document to extend knowledge</>
+            )}
             <input
               type="file"
               className="hidden"
               multiple
               accept=".pdf,.docx,.txt,.csv"
               onChange={handleFileUpload}
+              disabled={isUploading}
             />
           </label>
         </div>

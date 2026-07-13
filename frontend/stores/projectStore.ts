@@ -37,6 +37,7 @@ interface ProjectState {
   ) => Promise<Project>;
 
   fetchDatasets: () => Promise<void>;
+  deleteProject: (projectId: string) => Promise<void>;
 }
 
 export const useProjectStore = create<ProjectState>((set) => ({
@@ -152,6 +153,22 @@ export const useProjectStore = create<ProjectState>((set) => ({
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to fetch datasets';
       set({ error: message, isLoading: false });
+    }
+  },
+
+  deleteProject: async (projectId: string) => {
+    set({ isLoading: true, error: null });
+    try {
+      await api.delete(`/projects/${projectId}`);
+      set((state) => ({
+        projects: state.projects.filter((p) => p.id !== projectId),
+        activeProject: state.activeProject?.id === projectId ? null : state.activeProject,
+        isLoading: false,
+      }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to delete project';
+      set({ error: message, isLoading: false });
+      throw err;
     }
   },
 }));
