@@ -122,6 +122,12 @@ def _read_adapter_base_model(adapter_path: str) -> str:
     return ""
 
 
+def _is_small_slm(adapter_path: str) -> bool:
+    """Check if the active model is a <=2B SLM (e.g. 1.5B or 1.7B)."""
+    base_slug = _read_adapter_base_model(adapter_path).lower()
+    return any(tag in base_slug for tag in ["1.5b", "1.7b", "0.5b", "1b"])
+
+
 def _wait_for_gpu_ready():
     """
     [P0.3] Block until GPU is available (not training/draining).
@@ -437,6 +443,9 @@ def generate_rag_response(
 
     if _IDENTITY_TRIGGERS.search(question):
         identity_prompt = build_identity_system_prompt(active_persona)
+        adapter_path = f"data/adapters/job_{job_id}"
+        if _is_small_slm(adapter_path):
+            identity_prompt += "\nRespond immediately and directly without <think> blocks."
         if introduced:
             identity_prompt += f"\n{no_intro_directive}"
             
@@ -543,6 +552,9 @@ def generate_rag_response_stream(
 
     if _IDENTITY_TRIGGERS.search(question):
         identity_prompt = build_identity_system_prompt(active_persona)
+        adapter_path = f"data/adapters/job_{job_id}"
+        if _is_small_slm(adapter_path):
+            identity_prompt += "\nRespond immediately and directly without <think> blocks."
         if introduced:
             identity_prompt += f"\n{no_intro_directive}"
 
@@ -628,13 +640,17 @@ def generate_rag_response_stream(
     def chunk_generator():
         in_think_block = False
         buffer = ""
+        think_buffer = []
+        yielded_any = False
         for new_text in streamer:
             buffer += new_text
             while True:
                 if not in_think_block:
                     if "<think>" in buffer:
                         pre, buffer = buffer.split("<think>", 1)
-                        if pre: yield pre
+                        if pre:
+                            yielded_any = True
+                            yield pre
                         in_think_block = True
                     else:
                         match_found = False
@@ -642,36 +658,53 @@ def generate_rag_response_stream(
                             partial = "<think>"[:i]
                             if buffer.endswith(partial):
                                 safe_to_yield = buffer[:-i]
-                                if safe_to_yield: yield safe_to_yield
+                                if safe_to_yield:
+                                    yielded_any = True
+                                    yield safe_to_yield
                                 buffer = buffer[-i:]
                                 match_found = True
                                 break
                         if not match_found:
-                            if buffer: yield buffer
+                            if buffer:
+                                yielded_any = True
+                                yield buffer
                             buffer = ""
                         break
                 else:
                     if "</think>" in buffer:
-                        _, buffer = buffer.split("</think>", 1)
+                        think_part, buffer = buffer.split("</think>", 1)
+                        think_buffer.append(think_part)
                         in_think_block = False
                     else:
                         match_found = False
                         for i in range(7, 0, -1):
                             partial = "</think>"[:i]
                             if buffer.endswith(partial):
+                                think_buffer.append(buffer[:-i])
                                 buffer = buffer[-i:]
                                 match_found = True
                                 break
                         if not match_found:
+                            think_buffer.append(buffer)
                             buffer = ""
                         break
         if not in_think_block and buffer:
+            yielded_any = True
             yield buffer
+        elif in_think_block and buffer:
+            think_buffer.append(buffer)
+
+        # Universal SLM Safety Net: if model yielded 0 tokens outside <think>,
+        # rescue and yield the clean text from inside <think>...</think>.
+        if not yielded_any and think_buffer:
+            rescued = "".join(think_buffer).strip()
+            if rescued:
+                yield rescued
 
     has_yielded_content = False
     for chunk in chunk_generator():
-        # Strip in-text Source/citation tags like [Source: ...], source:[], Source: [...]
-        chunk = re.sub(r'\[?[Ss]ources?:?\s*(\[.*?\]|[^.\n\]]+\]?)', '', chunk)
+        # Safe line/bracket filter for explicit [Source: ...] brackets only
+        chunk = re.sub(r'\[[Ss]ource:.*?\]', '', chunk)
         if not has_yielded_content:
             chunk = chunk.lstrip()
         if chunk:
