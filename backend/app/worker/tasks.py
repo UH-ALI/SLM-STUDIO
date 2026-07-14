@@ -1,0 +1,347 @@
+import logging
+import os
+import uuid
+from .celery_app import celery_app
+from app.database import SessionLocal
+from app.models import TrainingJob, Dataset, JobStatus, ModelArtifact, Project
+
+# Import our decoupled AI modules
+from app.ai.rag_ingestion import process_and_ingest_document
+from app.ai.data_generator import generate_finetuning_data
+from app.core.config import settings
+import requests
+import redis
+import time
+
+logger = logging.getLogger(__name__)
+
+# --- FIX: Match Upstash Strict TLS/SSL Requirements ---
+# Celery requires the uppercase query string in .env, but standalone redis-py
+# parses it into an invalid flag. We strip the parameter so from_url can
+# automatically negotiate standard, secure TLS defaults with Upstash.
+# [P0.4] Redis client for GPU state coordination
+redis_url = settings.CELERY_BROKER_URL
+if "?" in redis_url:
+    redis_url = redis_url.split("?")[0]
+
+_redis_client = redis.Redis.from_url(redis_url, decode_responses=True)
+# ──────────────────────────────────────────────────────
+
+
+def _write_log(db, job_id, level, message):
+    """Write a log entry to the job_logs table."""
+    from app.models import JobLog
+    log = JobLog(
+        job_id=job_id,
+        level=level,
+        message=message
+    )
+    db.add(log)
+    db.commit()
+
+
+# ─── TASK 1: THE RAG INGESTION WORKER ────────────────────────────────────────
+
+@celery_app.task(name="ingest_document_task", bind=True)
+def ingest_document_task(self, project_id: str, dataset_id: str):
+    """
+    [PROJECT REFACTOR] Now accepts project_id + dataset_id.
+    Fires independently when a document is uploaded.
+    Extracts Markdown, chunks text, and populates ChromaDB.
+
+    If project_id is None, falls back to legacy dataset-only collection naming
+    for backward compatibility.
+    """
+    # [DATA SOVEREIGNTY FIX] Generic log message — no UUIDs exposed
+    logger.info("[Celery Worker] Document ingestion started")
+    db = SessionLocal()
+
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        if not dataset:
+            # [DATA SOVEREIGNTY FIX] Generic error message
+            logger.error("[Celery Worker] Dataset not found")
+            return
+
+        # Phase 1: Vectorize and store in ChromaDB
+        # [PROJECT REFACTOR] Pass project_id for project-scoped collection naming
+        process_and_ingest_document(
+            project_id=project_id,
+            dataset_id=str(dataset.id),
+            file_path=dataset.file_path
+        )
+
+        # [DATA SOVEREIGNTY FIX] Generic success message
+        logger.info("[Celery Worker] Document ingestion completed")
+
+    except Exception as e:
+        # [DATA SOVEREIGNTY FIX] Sanitized error — only exception type, no internal details
+        logger.error(f"[Celery Worker] Ingestion failed: {type(e).__name__}")
+        raise e
+
+    finally:
+        db.close()
+
+
+# ─── TASK 2: THE SLM FINE-TUNING WORKER ──────────────────────────────────────
+
+@celery_app.task(name="train_model_task", bind=True)
+def train_model_task(self, project_id: str, job_id: str):
+    """
+    [PROJECT REFACTOR] Now accepts project_id + job_id.
+    Fires when the user initiates a training run.
+    Connects to the pre-built ChromaDB, generates JSONL, and runs QLoRA training.
+
+    All config is read from the Project (the mutable source of truth).
+    The TrainingJob is an immutable snapshot of the config at train time.
+    """
+    from app.ai.finetune import run_finetuning_pipeline  # Import here to avoid circular imports
+    # [DATA SOVEREIGNTY FIX] Generic start message — no UUIDs
+    logger.info("[Celery Worker] Training task started")
+    db = SessionLocal()
+
+    try:
+        # [PROJECT REFACTOR] Read config from Project, not TrainingJob
+        project = db.query(Project).filter(Project.id == project_id).first()
+        if not project:
+            logger.error("[Celery Worker] Project not found in database")
+            return
+
+        job = db.query(TrainingJob).filter(TrainingJob.id == job_id).first()
+        if not job:
+            logger.error("[Celery Worker] Training job not found in database")
+            return
+
+        # Update both Project and Job status
+        project.status = JobStatus.PROCESSING
+        project.progress = 10
+        job.status = JobStatus.PROCESSING
+        db.commit()
+        # [DATA SOVEREIGNTY FIX] Generic log message — no UUIDs
+        _write_log(db, job.id, "INFO", "Training task started")
+
+        # Build the Persona Wrapper (using the AI team's strict boundaries)
+        # [PROJECT REFACTOR] Read persona from Project
+        persona_string = project.persona or (
+            "You are a highly capable AI domain expert.\n"
+            "Strictly adopt the following persona provided by the user:\n\n"
+            "[START USER DEFINED PERSONA]\n"
+            "You are an expert AI assistant specializing in the content of this document.\n"
+            "You explain concepts clearly and concisely using simple language.\n"
+            "When asked who you are, respond with: \"I am your AI assistant, here to help you understand this material. Ask me anything!\"\n"
+            "You only answer questions grounded in the provided document.\n"
+            "[END USER DEFINED PERSONA]\n\n"
+            "UNBREAKABLE BOUNDARIES:\n"
+            "- Answer entirely in the first-person voice of the role above.\n"
+            "- Never break character or remind the user you are an AI.\n"
+            "- If the context does not contain the answer, refuse politely in character:\n"
+            "  'This information is not available in the provided document.'\n"
+            "- Never fabricate facts."
+        )
+
+        # Phase 2: Data Generation Pipeline (Now reads from ChromaDB!)
+        # [PROJECT REFACTOR] Pass project_id for project-scoped collection
+        _write_log(db, job.id, "INFO", "Phase 2: Generating synthetic training data")
+        # [DATA SOVEREIGNTY FIX] Generic log message
+        logger.info("[Celery Worker] Phase 2: Generating synthetic training data")
+
+        project.progress = 30
+        db.commit()
+
+        generate_finetuning_data(
+            project_id=str(project_id),  # [PROJECT REFACTOR] was dataset_id
+            job_id=str(job.id),
+            use_case=project.use_case,
+            persona=persona_string,
+            few_shot_examples=project.few_shot_examples
+        )
+
+        # ─── MIDDLE HOOK PROTECTION ──────────────────────────────────────────
+        # [FIX] Neon (serverless Postgres) can silently close an idle connection
+        # during the time-consuming data-generation phase above; reconnect and
+        # re-fetch before continuing instead of committing on a dead session.
+        try:
+            if db:
+                db.close()
+        except Exception as mid_db_err:
+            logger.debug(f"[Celery Worker] Middle socket was already closed by Neon: {mid_db_err}")
+
+        db = SessionLocal()
+        project = db.query(Project).filter(Project.id == project_id).first()
+        job = db.query(TrainingJob).filter(TrainingJob.id == job_id).first()
+        # ───────────────────────────────────────────────────────────────────────
+
+        # Phase 3: Fine-Tuning Pipeline
+        # [PROJECT REFACTOR] Set TRAINING status and update progress
+        project.status = JobStatus.TRAINING
+        project.progress = 50
+        job.status = JobStatus.TRAINING
+        db.commit()
+        _write_log(db, job.id, "INFO", "Phase 3: Fine-tuning model with QLoRA")
+        # [DATA SOVEREIGNTY FIX] Generic log message
+        logger.info("[Celery Worker] Phase 3: Fine-tuning model")
+
+        # ─── VRAM CLEARANCE SIGNAL (P0.4: Request Draining + Fail-Closed) ────────
+        # Step 1: Signal "draining" so new inference requests wait instead of loading models
+        _redis_client.set("gpu:state", "draining", ex=30)
+        _write_log(db, job.id, "INFO", "GPU state: draining — waiting for active inference to complete")
+        logger.info("[Celery Worker] GPU state set to 'draining'. Waiting for active inference...")
+
+        # Step 2: Wait up to 5 seconds for any in-flight inference to finish
+        from app.ai.rag_inference import get_active_inference_count
+        for _ in range(10):  # 10 x 0.5s = 5s max
+            if get_active_inference_count() == 0:
+                break
+            time.sleep(0.5)
+
+        # Step 3: Clear VRAM with fail-closed handshake (§4.3)
+        _redis_client.set("gpu:state", "training", ex=600)  # 10 min TTL safety net
+        
+        # Clear local worker process VRAM cache first
+        try:
+            from app.ai.rag_inference import free_all_memory
+            free_all_memory()
+        except Exception as e:
+            logger.warning(f"[Celery Worker] Local free_all_memory warning: {e}")
+
+        vram_cleared = False
+        api_hosts = ["http://api:8000", "http://127.0.0.1:8000", "http://localhost:8000"]
+        for host in api_hosts:
+            for attempt in range(2):
+                try:
+                    api_url = f"{host}/api/v1/inference/system/vram"
+                    resp = requests.delete(api_url, params={"secret": settings.SECRET_KEY}, timeout=5)
+                    if resp.status_code == 200:
+                        logger.info(f"[Celery Worker] Successfully cleared API VRAM cache via {host}.")
+                        vram_cleared = True
+                        break
+                    else:
+                        logger.warning(f"[Celery Worker] API VRAM clear on {host} returned {resp.status_code}.")
+                except Exception as e:
+                    logger.debug(f"[Celery Worker] Could not contact {host} to clear VRAM: {e}")
+                time.sleep(0.5)
+            if vram_cleared:
+                break
+
+        # Check actual GPU memory allocation as fallback check
+        vram_allocated_gb = 0.0
+        try:
+            import torch
+            if torch.cuda.is_available():
+                vram_allocated_gb = torch.cuda.memory_allocated() / 1e9
+        except Exception:
+            pass
+
+        # [§4.3 Fail-Closed] If API clear failed AND GPU memory is still heavily loaded (>1.5 GB), abort safely
+        if not vram_cleared and vram_allocated_gb >= 1.5:
+            error_msg = f"VRAM clearance failed (current VRAM allocated: {vram_allocated_gb:.2f}GB) — aborting training to prevent OOM crash."
+            logger.error(f"[Celery Worker] {error_msg}")
+            _write_log(db, job.id, "ERROR", error_msg)
+            _redis_client.delete("gpu:state")
+            raise RuntimeError(error_msg)
+
+        # [PROJECT REFACTOR] Pass base_model_name from Project
+        finetune_results = run_finetuning_pipeline(
+            job_id=str(job.id),
+            use_case=project.use_case,
+            hyperparameters=project.hyperparameters or {},
+            base_model_name=project.base_model_name
+        )
+
+        # [FIX] Neon can also close the connection during the (much longer)
+        # fine-tuning run itself; reconnect before writing results.
+        try:
+            if db:
+                db.close()
+        except Exception as pre_save_err:
+            logger.debug(f"[Celery Worker] Training session was already closed by Neon before save: {pre_save_err}")
+
+        db = SessionLocal()
+        project = db.query(Project).filter(Project.id == project_id).first()
+        job = db.query(TrainingJob).filter(TrainingJob.id == job_id).first()
+
+        # Update progress during training (approximate)
+        project.progress = 90
+        db.commit()
+
+        # Record the model artifact in the database
+        _write_log(db, job.id, "INFO", "Saving model artifact")
+        # [DATA SOVEREIGNTY FIX] Generic log message
+        logger.info("[Celery Worker] Saving model artifact")
+
+        # [PROJECT REFACTOR] Use adapter_path instead of s3_path (L1 fix)
+        adapter_path = f"data/adapters/job_{job.id}"
+        new_artifact = ModelArtifact(
+            job_id=job.id,
+            adapter_path=adapter_path
+        )
+        db.add(new_artifact)
+
+        # Mark Success and update project state
+        project.status = JobStatus.COMPLETED
+        project.progress = 100
+        project.epoch = project.hyperparameters.get("epochs", 3) if project.hyperparameters else 3
+        # [L3 FIX] Store real metrics returned by finetune.py
+        project.metrics = {
+            "epoch": project.epoch,
+            "trainLoss": finetune_results.get("train_loss"),
+            "valLoss": finetune_results.get("val_loss"),
+            "learningRate": finetune_results.get("learning_rate"),
+            "gpuUtil": finetune_results.get("gpu_util"),
+            "adapterSizeMb": finetune_results.get("adapter_size_mb"),
+            "totalSteps": finetune_results.get("total_steps"),
+            "finalLoss": finetune_results.get("final_loss"),
+            "adapterPath": finetune_results.get("adapter_path"),
+            "trainingHistory": finetune_results.get("training_history", []),
+        }
+        job.status = JobStatus.COMPLETED
+        db.commit()
+
+        _write_log(db, job.id, "SUCCESS", "Training completed successfully")
+        # [DATA SOVEREIGNTY FIX] Generic success message
+        logger.info("[Celery Worker] Training task completed successfully")
+
+    except Exception as e:
+        # [DATA SOVEREIGNTY FIX] Sanitized error — only exception type, no UUIDs or paths
+        error_type = type(e).__name__
+        logger.error(f"[Celery Worker] Training failed: {error_type}")
+
+        # [FIX] Reconnect defensively — Neon may have already closed the
+        # session by the time we get here, and committing on a dead
+        # connection would swallow the failure-state write silently.
+        try:
+            db.close()
+        except Exception:
+            pass
+        db = SessionLocal()
+        project = db.query(Project).filter(Project.id == project_id).first() if project_id else None
+        job = db.query(TrainingJob).filter(TrainingJob.id == job_id).first() if job_id else None
+
+        if 'project' in locals() and project:
+            project.status = JobStatus.FAILED
+            # [DATA SOVEREIGNTY FIX] Sanitized error message
+            project.error_message = f"Training failed: {error_type}"
+            db.commit()
+
+        if 'job' in locals() and job:
+            job.status = JobStatus.FAILED
+            # [DATA SOVEREIGNTY FIX] Sanitized error message
+            job.error_message = f"Training failed: {error_type}"
+            _write_log(db, job.id, "ERROR", f"Training failed: {error_type}")
+            db.commit()
+
+        raise e
+
+    finally:
+        # [P0.4] ALWAYS clear gpu:state flag so inference can resume, even on failure
+        try:
+            _redis_client.delete("gpu:state")
+            logger.info("[Celery Worker] GPU state cleared — inference can resume.")
+        except Exception:
+            pass
+
+        try:
+            if db:
+                db.close()
+        except Exception as db_err:
+            logger.debug(f"[Celery Worker] Silent database close cleanup at end: {db_err}")

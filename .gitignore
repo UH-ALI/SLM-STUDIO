@@ -1,3 +1,79 @@
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+.python-version
+.pytest_cache/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Logs and databases
+*.log
+*.sqlite3
+
+# Editor directories and files
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+.next/
+out/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Next.js build
+/.next/
+/.vercel/
+
+# Docker
+.docker/
+docker-compose.override.yml
+
+# Environment variables and secrets
+.env
+.env.*
+secrets.json
+
+# Jupyter
+.ipynb_checkpoints
+
+# Model checkpoints, large binaries and caches
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.h5
+*.model
+*.tar.gz
+*.zip
+*.tar
+.cache/
+cache/
+
+# Misc
+coverage.xml
+.coverage
+htmlcov/
+docs/_build/
 # --- Environment / Secrets ---
 # Crucial: These contain your private keys and credentials.
 .env
