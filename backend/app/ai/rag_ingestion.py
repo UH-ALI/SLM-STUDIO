@@ -216,3 +216,83 @@ def process_and_ingest_document(project_id: str, dataset_id: str, file_path: str
 
     logger.info(f"Vector store ready — {len(docs)} chunks saved to {chroma_dir}.")
     return True
+
+
+def copy_vectors_across_projects(source_project_id: str, target_project_id: str, dataset_id: str):
+    """
+    Zero-compute vector reuse: copies existing embeddings from one project's
+    ChromaDB collection into another project's collection, skipping the entire
+    SentenceTransformer encode pipeline.
+
+    Used when the same Dataset is linked to multiple projects — instead of
+    re-running pymupdf4llm extraction + bge-small-en-v1.5 encoding (~30s),
+    this copies the pre-computed vectors in < 50ms.
+
+    Returns True if vectors were copied, False if source had no matching chunks.
+    """
+    source_dir = f"data/vector_stores/project_{source_project_id}"
+    source_name = f"docs_{source_project_id}"
+
+    if not os.path.exists(source_dir):
+        logger.warning(f"Source vector store not found: {source_dir}")
+        return False
+
+    try:
+        source_client = chromadb.PersistentClient(path=source_dir)
+        source_collection = source_client.get_or_create_collection(
+            name=source_name, metadata={"hnsw:space": "cosine"}
+        )
+
+        # Fetch only chunks belonging to this specific dataset
+        # (chunk IDs are prefixed with dataset_id: "{dataset_id}_{stem}_chunk_{i}")
+        all_data = source_collection.get(
+            where=None,
+            include=["documents", "embeddings", "metadatas"]
+        )
+
+        if not all_data["ids"]:
+            logger.info("Source collection is empty — nothing to copy.")
+            return False
+
+        # Filter to only the chunks belonging to this dataset_id
+        matching_indices = [
+            i for i, chunk_id in enumerate(all_data["ids"])
+            if chunk_id.startswith(f"{dataset_id}_")
+        ]
+
+        if not matching_indices:
+            logger.info(f"No chunks found for dataset {dataset_id} in source collection.")
+            return False
+
+        # Extract matched data
+        ids = [all_data["ids"][i] for i in matching_indices]
+        docs = [all_data["documents"][i] for i in matching_indices]
+        embeddings = [all_data["embeddings"][i] for i in matching_indices]
+        metadatas = [all_data["metadatas"][i] for i in matching_indices]
+
+        # Upsert into target project's collection
+        target_dir = f"data/vector_stores/project_{target_project_id}"
+        target_name = f"docs_{target_project_id}"
+        os.makedirs(target_dir, exist_ok=True)
+
+        target_client = chromadb.PersistentClient(path=target_dir)
+        target_collection = target_client.get_or_create_collection(
+            name=target_name, metadata={"hnsw:space": "cosine"}
+        )
+
+        target_collection.upsert(
+            documents=docs,
+            embeddings=embeddings,
+            metadatas=metadatas,
+            ids=ids
+        )
+
+        logger.info(
+            f"Zero-compute copy complete: {len(ids)} chunks copied "
+            f"from project {source_project_id} → {target_project_id}."
+        )
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to copy vectors: {type(e).__name__}: {e}")
+        return False

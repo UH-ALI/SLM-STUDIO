@@ -37,7 +37,8 @@ interface ProjectState {
   ) => Promise<Project>;
 
   fetchDatasets: () => Promise<void>;
-  deleteProject: (projectId: string) => Promise<void>;
+  deleteProject: (projectId: string, force?: boolean) => Promise<void>;
+  cancelProject: (projectId: string) => Promise<Project>;
 }
 
 export const useProjectStore = create<ProjectState>((set) => ({
@@ -156,10 +157,10 @@ export const useProjectStore = create<ProjectState>((set) => ({
     }
   },
 
-  deleteProject: async (projectId: string) => {
+  deleteProject: async (projectId: string, force?: boolean) => {
     set({ isLoading: true, error: null });
     try {
-      await api.delete(`/projects/${projectId}`);
+      await api.delete(`/projects/${projectId}${force ? '?force=true' : ''}`);
       set((state) => ({
         projects: state.projects.filter((p) => p.id !== projectId),
         activeProject: state.activeProject?.id === projectId ? null : state.activeProject,
@@ -167,6 +168,24 @@ export const useProjectStore = create<ProjectState>((set) => ({
       }));
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to delete project';
+      set({ error: message, isLoading: false });
+      throw err;
+    }
+  },
+
+  cancelProject: async (projectId: string) => {
+    set({ isLoading: true, error: null });
+    try {
+      const response = await api.post(`/projects/${projectId}/cancel`);
+      const updatedProject = response.data;
+      set((state) => ({
+        activeProject: updatedProject,
+        projects: state.projects.map((p) => (p.id === projectId ? updatedProject : p)),
+        isLoading: false,
+      }));
+      return updatedProject;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to cancel project';
       set({ error: message, isLoading: false });
       throw err;
     }

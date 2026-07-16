@@ -58,18 +58,25 @@ export function ProjectCard({ project, onMenuAction, className }: ProjectCardPro
   const gradient = useCaseGradients[project.useCase] || 'from-sage/30 to-mint/20';
   const iconColor = useCaseIconColors[project.useCase] || 'text-sage';
 
+  const isDraft = project.status === 'pending';
+
   const statusVariant: 'deployed' | 'training' | 'ready' | 'failed' =
-    project.status === 'completed'
-      ? 'deployed'
-      : project.status === 'processing'
-        ? 'training'
-        : project.status === 'failed'
-          ? 'failed'
-          : 'ready';
+    isDraft
+      ? 'ready'
+      : project.status === 'completed'
+        ? 'deployed'
+        : project.status === 'processing' || project.status === 'training'
+          ? 'training'
+          : project.status === 'failed'
+            ? 'failed'
+            : 'ready';
 
   const handleCardClick = () => {
     if (project.status === 'completed') {
       router.push(`/projects/${project.id}/playground`);
+    } else if (isDraft) {
+      // Resume the setup wizard where the user left off
+      router.push(`/projects/new?resumeId=${project.id}`);
     } else {
       router.push(`/projects/${project.id}/train`);
     }
@@ -165,8 +172,8 @@ export function ProjectCard({ project, onMenuAction, className }: ProjectCardPro
 
       {/* Status */}
       <div className="flex items-center gap-2 mb-4">
-        <Badge variant={statusVariant} pulse={project.status === 'processing'}>
-          {project.status}
+        <Badge variant={statusVariant} pulse={project.status === 'processing' || project.status === 'training'}>
+          {isDraft ? 'draft' : project.status}
         </Badge>
       </div>
 

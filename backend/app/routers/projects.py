@@ -138,10 +138,15 @@ def get_project(
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_project(
     project_id: str,
+    force: bool = False,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    """Deletes a project from the database and removes disk files (adapters, vector stores, datasets)."""
+    """
+    Deletes a project from the database and removes disk files.
+    Use ?force=true to delete a project that is stuck in processing/training.
+    Database deletion happens FIRST; disk cleanup follows only on success.
+    """
     project = (
         db.query(models.Project)
         .filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
@@ -150,24 +155,103 @@ def delete_project(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found or unauthorized")
 
-    # Clean up disk folders (adapters use job_<project_id>, vector stores use project_<project_id>)
+    # Block deletion of actively running projects unless force=true
+    if project.status in (models.JobStatus.PROCESSING, models.JobStatus.TRAINING) and not force:
+        raise HTTPException(
+            status_code=409,
+            detail="Project is currently processing/training. Use ?force=true to force delete, or cancel the project first.",
+        )
+
+    # Collect disk paths to clean up AFTER successful DB deletion
     base_data = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data")
-    for pattern in [
-        f"adapters/job_{project_id}",
-        f"vector_stores/project_{project_id}",
-        f"vector_stores/dataset_{project_id}",
-    ]:
-        folder_path = os.path.join(base_data, pattern)
+    job_ids = [str(j.id) for j in project.jobs]
+    disk_paths = [
+        os.path.join(base_data, f"vector_stores/project_{project_id}"),
+        os.path.join(base_data, f"vector_stores/dataset_{project_id}"),
+    ]
+    for jid in job_ids:
+        disk_paths.append(os.path.join(base_data, f"adapters/job_{jid}"))
+        disk_paths.append(os.path.join(base_data, f"processed/job_{jid}"))
+
+    # Step 1: Database deletion (cascading FKs handle jobs, artifacts, logs, usage)
+    project.datasets.clear()
+    db.flush()
+    db.delete(project)
+    db.commit()
+
+    # Step 2: Disk cleanup (only runs if DB commit succeeded)
+    for folder_path in disk_paths:
         if os.path.exists(folder_path):
             shutil.rmtree(folder_path, ignore_errors=True)
 
-    # Clear M:M association before deleting (avoids FK constraint on project_datasets)
-    project.datasets.clear()
-    db.flush()
+    # Step 3: Evict VRAM and collection caches (best-effort)
+    try:
+        from app.ai.rag_inference import ACTIVE_COLLECTIONS, unload_model
+        ACTIVE_COLLECTIONS.pop(project_id, None)
+        for jid in job_ids:
+            unload_model(jid)
+    except Exception:
+        pass
 
-    db.delete(project)
-    db.commit()
     return None
+
+
+# ─── CANCEL / UNLOCK STUCK PROJECT ──────────────────────────────────────────
+@router.post("/{project_id}/cancel", response_model=schemas.ProjectResponse)
+def cancel_project(
+    project_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """
+    Circuit breaker: forcefully cancels a stuck processing/training project.
+    Revokes the Celery task, resets project status to FAILED, and clears GPU locks.
+    """
+    project = (
+        db.query(models.Project)
+        .filter(models.Project.id == project_id, models.Project.user_id == current_user.id)
+        .first()
+    )
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found or unauthorized")
+
+    if project.status not in (models.JobStatus.PROCESSING, models.JobStatus.TRAINING):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Project is not stuck — current status is '{project.status.value}'. Cancel is only available for processing/training projects.",
+        )
+
+    # 1. Revoke any active Celery tasks for this project's latest job
+    latest_job = (
+        db.query(models.TrainingJob)
+        .filter(models.TrainingJob.project_id == project_id)
+        .order_by(models.TrainingJob.version.desc())
+        .first()
+    )
+    if latest_job:
+        try:
+            from app.worker.celery_app import celery_app as _celery
+            _celery.control.revoke(str(latest_job.id), terminate=True, signal="SIGTERM")
+        except Exception:
+            pass
+        latest_job.status = models.JobStatus.FAILED
+        latest_job.error_message = "Cancelled by user"
+
+    # 2. Reset project status so it's unlocked
+    project.status = models.JobStatus.FAILED
+    project.error_message = "Cancelled by user"
+    db.commit()
+
+    # 3. Clear GPU state locks in Redis
+    try:
+        import redis
+        _redis = redis.Redis.from_url(settings.CELERY_BROKER_URL, decode_responses=True)
+        _redis.delete("gpu:state")
+    except Exception:
+        pass
+
+    db.refresh(project)
+    return project
 
 
 # ─── UPLOAD DATASETS TO PROJECT ──────────────────────────────────────────────
@@ -204,19 +288,29 @@ def upload_project_datasets(
     if not files:
         raise HTTPException(status_code=400, detail="No files provided.")
 
+    import hashlib
+
     valid_files_info = []
     errors = []
 
-    # PASS 1: validate and save every file, collecting errors without committing anything
+    # PASS 1: validate, save, and compute SHA-256 hash for every file
     for file in files:
         try:
             file_ext, file_location = validate_file(file)
             save_file(file, file_location)
             validate_format_specific(file_ext, file_location, file.filename)
+
+            # Compute SHA-256 hash of the saved file for deduplication
+            sha256 = hashlib.sha256()
+            with open(file_location, "rb") as f:
+                for chunk in iter(lambda: f.read(8192), b""):
+                    sha256.update(chunk)
+
             valid_files_info.append({
                 "file_ext": file_ext,
                 "file_location": file_location,
                 "filename": file.filename,
+                "file_hash": sha256.hexdigest(),
             })
         except HTTPException as e:
             errors.append(f"{file.filename}: {e.detail}")
@@ -229,19 +323,84 @@ def upload_project_datasets(
                 os.remove(info["file_location"])
         raise HTTPException(status_code=400, detail=f"Validation failed for some files: {'; '.join(errors)}")
 
-    # PASS 2: every file passed — now create DB records, link to project, dispatch ingestion
+    # PASS 2: dedup check + create DB records, link to project, dispatch ingestion
     created_datasets = []
     for info in valid_files_info:
         dataset_name = name or os.path.basename(info["file_location"])
-        new_dataset = create_dataset_record(
-            db, dataset_name, info["file_location"], info["file_ext"], current_user.id
-        )
+        file_hash = info["file_hash"]
 
-        project.datasets.append(new_dataset)
-        db.commit()
+        # ── Dedup Check 1: Same project — reject exact duplicate ──
+        existing_in_project = [
+            ds for ds in project.datasets
+            if ds.name == dataset_name or ds.file_hash == file_hash
+        ]
+        if existing_in_project:
+            # Clean up the just-saved file since we're rejecting it
+            if os.path.exists(info["file_location"]):
+                os.remove(info["file_location"])
+            errors.append(
+                f"Document '{dataset_name}' is already attached to this project."
+            )
+            continue
 
-        ingest_document_task.delay(str(project_id), str(new_dataset.id))
-        created_datasets.append(new_dataset)
+        # ── Dedup Check 2: Cross-project — reuse existing Dataset row ──
+        existing_dataset = (
+            db.query(models.Dataset)
+            .filter(
+                models.Dataset.user_id == current_user.id,
+                models.Dataset.file_hash == file_hash,
+            )
+            .first()
+        ) if file_hash else None
+
+        if existing_dataset:
+            # Reuse the existing Dataset entity — no duplicate file or DB row needed
+            if os.path.exists(info["file_location"]):
+                os.remove(info["file_location"])  # Remove the duplicate saved file
+
+            project.datasets.append(existing_dataset)
+            db.commit()
+
+            # Copy vectors from any project that already has this dataset's embeddings
+            source_project = None
+            for sp in existing_dataset.projects:
+                if str(sp.id) != str(project_id):
+                    source_project = sp
+                    break
+
+            if source_project:
+                try:
+                    from app.ai.rag_ingestion import copy_vectors_across_projects
+                    copy_vectors_across_projects(
+                        source_project_id=str(source_project.id),
+                        target_project_id=str(project_id),
+                        dataset_id=str(existing_dataset.id),
+                    )
+                except Exception:
+                    # Fallback: if vector copy fails, dispatch full ingestion
+                    ingest_document_task.delay(str(project_id), str(existing_dataset.id))
+            else:
+                # First time this dataset is being used — full ingestion
+                ingest_document_task.delay(str(project_id), str(existing_dataset.id))
+
+            created_datasets.append(existing_dataset)
+        else:
+            # Brand new file — create fresh Dataset record with hash
+            new_dataset = create_dataset_record(
+                db, dataset_name, info["file_location"], info["file_ext"], current_user.id
+            )
+            new_dataset.file_hash = file_hash
+            db.flush()
+
+            project.datasets.append(new_dataset)
+            db.commit()
+
+            ingest_document_task.delay(str(project_id), str(new_dataset.id))
+            created_datasets.append(new_dataset)
+
+    # If ALL files were duplicates, raise error
+    if errors and not created_datasets:
+        raise HTTPException(status_code=400, detail="; ".join(errors))
 
     for ds in created_datasets:
         db.refresh(ds)

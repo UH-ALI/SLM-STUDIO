@@ -11,8 +11,8 @@ from app.database import Base
 project_datasets = Table(
     'project_datasets',
     Base.metadata,
-    Column('project_id', UUID(as_uuid=True), ForeignKey('projects.id'), primary_key=True),
-    Column('dataset_id', UUID(as_uuid=True), ForeignKey('datasets.id'), primary_key=True)
+    Column('project_id', UUID(as_uuid=True), ForeignKey('projects.id', ondelete='CASCADE'), primary_key=True),
+    Column('dataset_id', UUID(as_uuid=True), ForeignKey('datasets.id', ondelete='CASCADE'), primary_key=True)
 )
 
 # --- The Options (Enums) ---
@@ -106,6 +106,7 @@ class Dataset(Base):
     name = Column(String, nullable=False)
     file_path = Column(String, nullable=False)
     dataset_type = Column(Enum(DatasetType), default=DatasetType.STRUCTURED)
+    file_hash = Column(String, index=True, nullable=True)  # SHA-256 hash for deduplication
     summary_path = Column(String, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -123,7 +124,7 @@ class TrainingJob(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
 
     # [PROJECT REFACTOR] New FK to Project (nullable for backward compatibility)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=True)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
     # [PROJECT REFACTOR] version auto-increments per project (1, 2, 3...)
     version = Column(Integer, default=1)
 
@@ -146,8 +147,8 @@ class TrainingJob(Base):
     # [PROJECT REFACTOR] New relationship
     project = relationship("Project", back_populates="jobs")
     dataset = relationship("Dataset", back_populates="jobs")
-    artifact = relationship("ModelArtifact", back_populates="job", uselist=False)
-    logs = relationship("JobLog", back_populates="job", order_by="JobLog.created_at")
+    artifact = relationship("ModelArtifact", back_populates="job", uselist=False, cascade="all, delete-orphan")
+    logs = relationship("JobLog", back_populates="job", order_by="JobLog.created_at", cascade="all, delete-orphan")
 
 
 class ModelArtifact(Base):
@@ -155,7 +156,7 @@ class ModelArtifact(Base):
 
     # CHANGED: Integer -> UUID for PK and FK
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
-    job_id = Column(UUID(as_uuid=True), ForeignKey("training_jobs.id"), nullable=False)
+    job_id = Column(UUID(as_uuid=True), ForeignKey("training_jobs.id", ondelete="CASCADE"), nullable=False)
 
     # [PROJECT REFACTOR] Renamed from s3_path to adapter_path (L1 fix)
     adapter_path = Column(String, nullable=False)
@@ -184,7 +185,7 @@ class JobLog(Base):
     __tablename__ = "job_logs"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
-    job_id = Column(UUID(as_uuid=True), ForeignKey("training_jobs.id"), nullable=False, index=True)
+    job_id = Column(UUID(as_uuid=True), ForeignKey("training_jobs.id", ondelete="CASCADE"), nullable=False, index=True)
 
     level = Column(String, nullable=False)   # INFO, WARNING, ERROR, SUCCESS
     message = Column(Text, nullable=False)

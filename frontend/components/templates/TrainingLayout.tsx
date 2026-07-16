@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle } from "lucide-react";
 import { TrainingPanel } from "@/components/organisms/TrainingPanel";
 import { LogPanel } from "@/components/organisms/LogPanel";
 import { GraphPanel } from "@/components/organisms/GraphPanel";
@@ -37,10 +38,25 @@ export function TrainingLayout({ children }: TrainingLayoutProps) {
     setEpoch,
   } = useTrainingStore();
   const { addToast } = useUIStore();
-  const { fetchProject, startTraining } = useProjectStore();
+  const { fetchProject, startTraining, cancelProject } = useProjectStore();
 
   const [showRetryModal, setShowRetryModal] = useState(false);
   const [retryProjectData, setRetryProjectData] = useState<any>(null);
+  const [isCancelling, setIsCancelling] = useState(false);
+
+  const handleCancel = async () => {
+    setIsCancelling(true);
+    try {
+      await cancelProject(jobId);
+      addToast({ type: "success", message: "Project cancelled and unlocked. You can retry or delete it." });
+      queryClient.invalidateQueries({ queryKey: ['projectStatus', jobId] });
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      addToast({ type: "error", message: detail || "Failed to cancel project." });
+    } finally {
+      setIsCancelling(false);
+    }
+  };
 
   const executeRetry = async (useSafeDefaults: boolean) => {
     setShowRetryModal(false);
@@ -167,6 +183,33 @@ export function TrainingLayout({ children }: TrainingLayoutProps) {
           onContinue={() => executeRetry(true)} 
         />
       )}
+
+      {/* Cancel & Unlock circuit breaker banner */}
+      {(status === "processing" || status === "training") && (
+        <div className="glass-card flex items-center justify-between gap-4 border border-amber/20 bg-amber/[0.04]">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-amber/10 flex items-center justify-center shrink-0">
+              <AlertTriangle size={18} className="text-amber" />
+            </div>
+            <div>
+              <h4 className="text-sm font-medium text-ivory">
+                Project is {status === "training" ? "training" : "processing"}
+              </h4>
+              <p className="text-xs text-fern mt-0.5">
+                If this seems stuck, you can cancel and unlock the project to retry or delete it.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={handleCancel}
+            disabled={isCancelling}
+            className="shrink-0 px-4 py-2 rounded-xl bg-amber/10 border border-amber/30 text-amber text-sm font-medium hover:bg-amber/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isCancelling ? "Cancelling..." : "⚠️ Cancel & Unlock"}
+          </button>
+        </div>
+      )}
+
       {/* Main panels */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Left: Training Panel */}

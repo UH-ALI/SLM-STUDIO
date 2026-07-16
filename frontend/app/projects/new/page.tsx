@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { DashboardLayout } from '@/components/templates/DashboardLayout';
 import { WizardLayout } from '@/components/templates/WizardLayout';
 import { WizardSetup } from '@/components/organisms/WizardSetup';
@@ -10,6 +10,7 @@ import { WizardConfigure } from '@/components/organisms/WizardConfigure';
 import { LoadingBuffer } from '@/components/organisms/LoadingBuffer';
 import { useProjectStore } from '@/stores/projectStore';
 import { useUIStore } from '@/stores/uiStore';
+import api from '@/lib/api';
 import type { FewShotExample, Hyperparameters } from '@/types/project';
 
 // FastAPI returns errors in two shapes: a plain HTTPException gives
@@ -62,12 +63,63 @@ const defaultWizardData: WizardData = {
 
 export default function NewProjectPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const resumeId = searchParams.get('resumeId');
   const { createProject, uploadDatasets, startTraining } = useProjectStore();
   const { addToast } = useUIStore();
   const [currentStep, setCurrentStep] = useState(0);
   const [wizardData, setWizardData] = useState<WizardData>(defaultWizardData);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [projectId, setProjectId] = useState<string | null>(null);
+  const [isResuming, setIsResuming] = useState(false);
+
+  // ── Resume Draft Project ──────────────────────────────────────────────
+  // If ?resumeId is present, load the existing project's config and datasets
+  // and jump the wizard to the appropriate step.
+  useEffect(() => {
+    if (!resumeId) return;
+
+    setIsResuming(true);
+    (async () => {
+      try {
+        const [projectRes, datasetsRes] = await Promise.all([
+          api.get(`/projects/${resumeId}`),
+          api.get(`/projects/${resumeId}/datasets`),
+        ]);
+        const project = projectRes.data;
+        const datasets = datasetsRes.data;
+
+        setProjectId(resumeId);
+        setWizardData((prev) => ({
+          ...prev,
+          name: project.name || prev.name,
+          useCase: project.useCase || prev.useCase,
+          persona: project.persona || prev.persona,
+          fewShotExamples: project.fewShotExamples?.length
+            ? project.fewShotExamples.map((ex: Record<string, string>) => {
+                const keys = Object.keys(ex);
+                return keys.length > 0
+                  ? { question: keys[0], answer: ex[keys[0]] }
+                  : { question: '', answer: '' };
+              })
+            : prev.fewShotExamples,
+        }));
+
+        // If datasets exist, jump to Configure (step 2); otherwise Upload (step 1)
+        if (datasets && datasets.length > 0) {
+          setCurrentStep(2);
+        } else {
+          setCurrentStep(1);
+        }
+
+        addToast({ type: 'info', message: `Resuming "${project.name}" — pick up where you left off.` });
+      } catch (err) {
+        addToast({ type: 'error', message: 'Failed to resume draft project. Starting fresh.' });
+      } finally {
+        setIsResuming(false);
+      }
+    })();
+  }, [resumeId]);
 
   const handleSetupChange = (data: {
     name: string;
@@ -182,6 +234,13 @@ export default function NewProjectPage() {
 
     tryStartTraining();
   };
+
+  if (isResuming) {
+    return <LoadingBuffer messages={[
+      'Resuming your draft project...',
+      'Loading saved configuration...',
+    ]} />;
+  }
 
   if (isSubmitting) {
     if (currentStep === 2) {
