@@ -76,6 +76,18 @@ class Project(Base):
     jobs = relationship("TrainingJob", back_populates="project", order_by="TrainingJob.created_at", cascade="all, delete-orphan")
     usage_records = relationship("DeploymentUsage", back_populates="project", cascade="all, delete-orphan")
 
+    @property
+    def has_jobs(self) -> bool:
+        """
+        True once training has ever been dispatched for this project.
+
+        Status alone cannot distinguish "still in the setup wizard" from "training was
+        just requested": /train sets status back to PENDING before dispatching, so a
+        project that is genuinely training reads as PENDING until the worker picks it
+        up — and reads that way forever if the worker never does.
+        """
+        return len(self.jobs) > 0
+
 
 class User(Base):
     __tablename__ = "users"
@@ -87,7 +99,9 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     # ADDED: is_active flag for IAM authentication
-    is_active = Column(Boolean, default=True) 
+    is_active = Column(Boolean, default=True)
+    # ADDED: email verification — False until user clicks verification link
+    is_email_verified = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     datasets = relationship("Dataset", back_populates="owner")

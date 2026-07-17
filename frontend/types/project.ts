@@ -27,6 +27,9 @@ export interface Project {
   inferenceTemperature?: number;
   progress?: number;
   epoch?: number;
+  /** True once training has ever been dispatched. Distinguishes a real draft from a
+   *  project sitting at 'pending' because the worker hasn't picked the job up yet. */
+  hasJobs?: boolean;
 }
 
 export interface Dataset {

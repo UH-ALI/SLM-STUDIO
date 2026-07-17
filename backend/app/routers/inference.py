@@ -344,6 +344,39 @@ def clear_all_vram(secret: str):
     free_all_memory()
     return {"message": "All API VRAM cleared successfully."}
 
+def _pick_retrievable_question(project_id: str, questions: list, max_tries: int = 6):
+    """
+    Picks a suggested question the assistant can actually answer.
+
+    The questions come from train.jsonl (what the model was fine-tuned on), but answers
+    at chat time come from RAG retrieval — a separate pipeline. A question can therefore
+    be genuinely in the training data yet get "This information is not available",
+    because its source chunk doesn't clear the retrieval threshold, or because the
+    document it came from failed to ingest. Suggesting those makes the assistant look
+    like it forgot its own material.
+
+    retrieve_context() is the same call the chat endpoint makes, and returns None in
+    exactly the cases that produce that refusal — so asking it here is a real check
+    rather than a guess at a threshold.
+    """
+    if not questions:
+        return None
+
+    from app.ai.rag_inference import retrieve_context
+
+    for question in random.sample(questions, min(max_tries, len(questions))):
+        try:
+            context, _ = retrieve_context(project_id, question)
+        except Exception:
+            break          # no vector store / unreadable — verification isn't possible
+        if context:
+            return question
+
+    # Nothing verified: fall back rather than block the panel. Worst case is today's
+    # behaviour, not a broken page.
+    return random.choice(questions)
+
+
 @router.get("/projects/{project_id}/sample_prompts")
 def get_sample_prompts(
     project_id: str,
@@ -399,7 +432,8 @@ def get_sample_prompts(
                 except Exception:
                     continue
 
-    factual = random.choice(factual_questions) if factual_questions else "What is the main topic of the document?"
+    factual = _pick_retrievable_question(project_id, factual_questions) \
+        or "What is the main topic of the document?"
     negative = random.choice(negative_questions) if negative_questions else "What does the author say about space travel?"
     
     persona_questions = [

@@ -48,7 +48,11 @@ export function TrainingLayout({ children }: TrainingLayoutProps) {
     setIsCancelling(true);
     try {
       await cancelProject(jobId);
-      addToast({ type: "success", message: "Project cancelled and unlocked. You can retry or delete it." });
+      addToast({
+        type: "success",
+        message: "Project unlocked — you can retry or delete it. A training run already " +
+                 "on the GPU may take a moment to finish.",
+      });
       queryClient.invalidateQueries({ queryKey: ['projectStatus', jobId] });
     } catch (err: any) {
       const detail = err?.response?.data?.detail;
@@ -196,7 +200,8 @@ export function TrainingLayout({ children }: TrainingLayoutProps) {
                 Project is {status === "training" ? "training" : "processing"}
               </h4>
               <p className="text-xs text-fern mt-0.5">
-                If this seems stuck, you can cancel and unlock the project to retry or delete it.
+                If this seems stuck, reset the status to unlock the project so you can retry
+                or delete it.
               </p>
             </div>
           </div>
@@ -205,7 +210,7 @@ export function TrainingLayout({ children }: TrainingLayoutProps) {
             disabled={isCancelling}
             className="shrink-0 px-4 py-2 rounded-xl bg-amber/10 border border-amber/30 text-amber text-sm font-medium hover:bg-amber/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isCancelling ? "Cancelling..." : "⚠️ Cancel & Unlock"}
+            {isCancelling ? "Unlocking..." : "Reset status & unlock"}
           </button>
         </div>
       )}

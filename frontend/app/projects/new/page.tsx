@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { DashboardLayout } from '@/components/templates/DashboardLayout';
 import { WizardLayout } from '@/components/templates/WizardLayout';
@@ -61,7 +61,7 @@ const defaultWizardData: WizardData = {
   },
 };
 
-export default function NewProjectPage() {
+function NewProjectPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const resumeId = searchParams.get('resumeId');
@@ -95,12 +95,16 @@ export default function NewProjectPage() {
           name: project.name || prev.name,
           useCase: project.useCase || prev.useCase,
           persona: project.persona || prev.persona,
+          // Two storage shapes exist. The wizard posts {question, answer}, which the
+          // backend stores verbatim; older rows use the collapsed {<question>: <answer>}
+          // form. Reading keys[0] blindly turns the first into the literal "question".
           fewShotExamples: project.fewShotExamples?.length
             ? project.fewShotExamples.map((ex: Record<string, string>) => {
-                const keys = Object.keys(ex);
-                return keys.length > 0
-                  ? { question: keys[0], answer: ex[keys[0]] }
-                  : { question: '', answer: '' };
+                if ('question' in ex && 'answer' in ex) {
+                  return { question: ex.question ?? '', answer: ex.answer ?? '' };
+                }
+                const [question, answer] = Object.entries(ex)[0] ?? ['', ''];
+                return { question, answer };
               })
             : prev.fewShotExamples,
         }));
@@ -291,5 +295,15 @@ export default function NewProjectPage() {
         )}
       </WizardLayout>
     </DashboardLayout>
+  );
+}
+
+// useSearchParams() forces this route out of static prerendering, which `next build`
+// rejects unless the reader sits inside a Suspense boundary.
+export default function NewProjectPage() {
+  return (
+    <Suspense fallback={<LoadingBuffer messages={['Loading the setup wizard...']} />}>
+      <NewProjectPageInner />
+    </Suspense>
   );
 }

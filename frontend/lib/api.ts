@@ -2,7 +2,10 @@ import axios from 'axios';
 
 const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1',
-  timeout: 30000,
+  // 120s, not 30s: a cold model load (first request after the API starts, on an
+  // 8GB GPU) can take tens of seconds. The streaming chat path uses fetch() and
+  // isn't affected, but any axios call that touches inference must not abort mid-load.
+  timeout: 120000,
   headers: {
     'Content-Type': 'application/json',
   },

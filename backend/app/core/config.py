@@ -26,6 +26,16 @@ class Settings(BaseSettings):
     # Set this to your actual deployed domain in production.
     PUBLIC_API_BASE_URL: str = "http://localhost:8000"
 
+    # Frontend URL — used to generate email verification / reset-password links.
+    FRONTEND_URL: str = "http://localhost:3000"
+
+    # ─── Email (Gmail SMTP) ───────────────────────────────────────────────────
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""          # your.email@gmail.com
+    SMTP_PASSWORD: str = ""      # Gmail App Password (NOT your login password)
+    SMTP_FROM_NAME: str = "SLM Studio"
+
     # Pydantic configuration to load the file
     model_config = SettingsConfigDict(
         env_file=".env", 

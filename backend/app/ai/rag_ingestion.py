@@ -114,9 +114,73 @@ def is_reference_chunk(chunk: str) -> bool:
     return (ref_lines / len(lines)) > 0.35
 
 
+# ─── PDF TEXT EXTRACTION ─────────────────────────────────────────────────────
+
+MIN_PDF_WORDS = 80   # below this we treat the extraction as having failed
+
+
+def _extract_pdf_text(path, source_name: str) -> str:
+    """
+    Extracts text from a PDF, trying progressively different readers.
+
+    A single extractor is not enough: pymupdf4llm's layout-aware Markdown pass
+    returns almost nothing on some documents (unusual font encodings, heavy
+    multi-column policy layouts) even though the file has a perfectly good text
+    layer. Previously that empty result was reported as "this is a scanned PDF",
+    which sent users off converting a file that never needed converting.
+
+    Each reader here has different failure modes, so trying them in turn recovers
+    documents any one of them chokes on. Only when all four come back near-empty
+    is the file actually image-only. Every library used is already a dependency.
+    """
+    attempts: dict = {}
+
+    def _try(name, fn):
+        try:
+            text = fn() or ""
+        except Exception as e:
+            attempts[name] = f"error: {type(e).__name__}"
+            return None
+        attempts[name] = len(text.split())
+        return text if len(text.split()) >= MIN_PDF_WORDS else None
+
+    # 1. Layout-aware Markdown — best structure when it works (headings drive chunking).
+    text = _try("pymupdf4llm", lambda: pymupdf4llm.to_markdown(str(path)))
+    if text:
+        return text
+
+    # 2. Raw PyMuPDF text layer — no layout analysis to get confused by.
+    def _fitz_text():
+        import fitz
+        with fitz.open(str(path)) as doc:
+            return "\n\n".join(page.get_text("text") for page in doc)
+    text = _try("fitz", _fitz_text)
+    if text:
+        return text
+
+    # 3. MarkItDown — different engine again.
+    text = _try("markitdown", lambda: MarkItDown().convert(str(path)).text_content)
+    if text:
+        return text
+
+    # 4. pypdf — oldest and least layout-aware, but occasionally the only one that reads it.
+    def _pypdf_text():
+        from pypdf import PdfReader
+        return "\n\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages)
+    text = _try("pypdf", _pypdf_text)
+    if text:
+        return text
+
+    raise ValueError(
+        f"'{source_name}' appears to be a scanned or image-only PDF — no text layer "
+        f"could be read. Words found per extractor: {attempts}. "
+        "Please upload a text-layer PDF, or convert it to DOCX first."
+    )
+
+
 # ─── MAIN BACKEND ROUTER ─────────────────────────────────────────────────────
 
-def process_and_ingest_document(project_id: str, dataset_id: str, file_path: str):
+def process_and_ingest_document(project_id: str, dataset_id: str, file_path: str, display_name: str = None):
     """
     Backend Entry Point for Phase 1.
     Extracts text, chunks it using AI team logic, and saves to persistent ChromaDB.
@@ -134,24 +198,19 @@ def process_and_ingest_document(project_id: str, dataset_id: str, file_path: str
     if not path.exists():
         raise FileNotFoundError(f"Cannot find {file_path}")
 
+    # Files are stored uuid-prefixed, so path.name is not presentable. Citations and
+    # the ingestion report key off this, so it must be the name the user recognises.
+    source_name = display_name or path.name
+
     # 1. Extract Markdown (format-aware)
-    print(f"Extracting Markdown from: {path.name}")
-    try:
-        if path.suffix.lower() == ".pdf":
-            md_text = pymupdf4llm.to_markdown(str(path))
-            word_count = len(md_text.split())
-            if word_count < 80:
-                raise ValueError(
-                    f"'{path.name}' appears to be a scanned/image-only PDF "
-                    f"(extracted only {word_count} words). "
-                    "Please upload a text-layer PDF or convert it to DOCX first."
-                )
-        else:
-            md = MarkItDown()
-            result = md.convert(str(path))
-            md_text = result.text_content
-    except Exception as e:
-        raise ValueError(f"Failed to extract text from {path.name}: {str(e)}")
+    logger.info(f"Extracting text from: {source_name}")
+    if path.suffix.lower() == ".pdf":
+        md_text = _extract_pdf_text(path, source_name)
+    else:
+        try:
+            md_text = MarkItDown().convert(str(path)).text_content
+        except Exception as e:
+            raise ValueError(f"Failed to extract text from {source_name}: {e}")
 
     # 2. Hybrid Chunking
     chunk_tuples = hybrid_chunk_markdown(md_text)
@@ -166,7 +225,7 @@ def process_and_ingest_document(project_id: str, dataset_id: str, file_path: str
     for i, (text, chapter) in enumerate(usable_chunks):
         docs.append(text)
         metadatas.append({
-            "source": path.name,
+            "source": source_name,
             "chapter": chapter or "General",
             "file_type": path.suffix.lower()
         })
@@ -216,6 +275,43 @@ def process_and_ingest_document(project_id: str, dataset_id: str, file_path: str
 
     logger.info(f"Vector store ready — {len(docs)} chunks saved to {chroma_dir}.")
     return True
+
+
+def get_ingested_sources(project_id: str) -> dict:
+    """
+    Returns {source_filename: chunk_count} for everything currently in a project's
+    vector store.
+
+    Ingestion runs per-document in a background task, so one document failing to
+    parse leaves the others working — the model then silently answers from a subset
+    of what the user uploaded, with nothing in the UI to say so. Reading the `source`
+    metadata back out is enough to tell which documents actually made it in, without
+    tracking per-dataset state in Postgres.
+
+    Returns {} when the project has no vector store yet (nothing ingested at all).
+    """
+    chroma_dir = f"data/vector_stores/project_{project_id}"
+    if not os.path.exists(chroma_dir):
+        return {}
+
+    try:
+        client = chromadb.PersistentClient(path=chroma_dir)
+        collection = client.get_or_create_collection(
+            name=f"docs_{project_id}", metadata={"hnsw:space": "cosine"}
+        )
+        data = collection.get(include=["metadatas"])
+    except Exception as e:
+        logger.error(f"Could not read vector store for project {project_id}: {e}")
+        return {}
+
+    counts: dict = {}
+    for meta in (data.get("metadatas") or []):
+        if not meta:
+            continue
+        source = meta.get("source")
+        if source:
+            counts[source] = counts.get(source, 0) + 1
+    return counts
 
 
 def copy_vectors_across_projects(source_project_id: str, target_project_id: str, dataset_id: str):

@@ -37,6 +37,10 @@ export function PlaygroundLayout() {
   const [activePanel, setActivePanel] = useState<SidePanel>("none");
   const [persona, setPersona] = useState<string>("Loading project persona...");
   const [documents, setDocuments] = useState<string[]>([]);
+  // Which documents actually made it into the vector store. A document that failed to
+  // parse still shows in the list, so without this the assistant just seems not to know
+  // things the user believes they uploaded.
+  const [ingestion, setIngestion] = useState<Record<string, number>>({});
 
   useEffect(() => {
     if (!jobId) return;
@@ -62,6 +66,17 @@ export function PlaygroundLayout() {
         }
       } catch (err) {
         console.error("Failed to load datasets:", err);
+      }
+
+      try {
+        const statusRes = await api.get(`/projects/${jobId}/ingestion_status`);
+        const map: Record<string, number> = {};
+        for (const doc of statusRes.data?.documents ?? []) {
+          map[doc.name] = doc.chunks;
+        }
+        setIngestion(map);
+      } catch (err) {
+        console.error("Failed to load ingestion status:", err);
       }
     }
 
@@ -104,9 +119,7 @@ export function PlaygroundLayout() {
     }
   };
 
-  const removeDocument = (name: string) => {
-    setDocuments((prev) => prev.filter((d) => d !== name));
-  };
+
 
   return (
     <div className="h-[calc(100vh-100px)] flex flex-col gap-3">
@@ -170,24 +183,33 @@ export function PlaygroundLayout() {
 
           {/* Existing documents */}
           <div className="flex flex-col gap-1.5">
-            {documents.map((doc) => (
+            {documents.map((doc) => {
+              const chunks = ingestion[doc];
+              const notReady = chunks === 0;
+              return (
               <div
                 key={doc}
                 className="flex items-center justify-between px-3 py-2 rounded-lg bg-[#121B16]/60 border border-white/[0.06]"
               >
                 <div className="flex items-center gap-2 min-w-0">
-                  <FileText size={13} className="text-gold shrink-0" />
+                  <FileText size={13} className={notReady ? "text-rose shrink-0" : "text-gold shrink-0"} />
                   <span className="text-xs text-ivory truncate">{doc}</span>
+                  {notReady ? (
+                    <span
+                      title="No readable text was extracted from this document, so the assistant cannot answer from it."
+                      className="shrink-0 text-[0.6rem] font-medium uppercase tracking-wide px-1.5 py-0.5 rounded bg-rose/15 text-rose border border-rose/30"
+                    >
+                      Not readable
+                    </span>
+                  ) : chunks > 0 ? (
+                    <span className="shrink-0 text-[0.6rem] text-muted tabular-nums">
+                      {chunks} chunks
+                    </span>
+                  ) : null}
                 </div>
-                <button
-                  onClick={() => removeDocument(doc)}
-                  className="ml-3 shrink-0"
-                  aria-label={`Remove ${doc}`}
-                >
-                  <X size={12} className="text-muted hover:text-rose transition-colors" />
-                </button>
               </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* Upload new */}

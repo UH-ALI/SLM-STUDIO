@@ -58,7 +58,10 @@ export function ProjectCard({ project, onMenuAction, className }: ProjectCardPro
   const gradient = useCaseGradients[project.useCase] || 'from-sage/30 to-mint/20';
   const iconColor = useCaseIconColors[project.useCase] || 'text-sage';
 
-  const isDraft = project.status === 'pending';
+  // A project is only a draft while it is still in setup. /train sets status back to
+  // PENDING before dispatching, so gating on status alone labelled projects that were
+  // actually training as "draft" and sent the user back into the wizard.
+  const isDraft = project.status === 'pending' && !project.hasJobs;
 
   const statusVariant: 'deployed' | 'training' | 'ready' | 'failed' =
     isDraft

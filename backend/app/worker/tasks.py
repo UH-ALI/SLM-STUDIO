@@ -59,7 +59,8 @@ def ingest_document_task(self, project_id: str, dataset_id: str):
         process_and_ingest_document(
             project_id=project_id,
             dataset_id=str(dataset.id),
-            file_path=dataset.file_path
+            file_path=dataset.file_path,
+            display_name=dataset.name
         )
 
         # [DATA SOVEREIGNTY FIX] Generic success message

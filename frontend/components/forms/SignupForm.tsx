@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { UserPlus, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/atoms/Button';
-import { useAuthStore } from '@/stores/authStore';
 import { useUIStore } from '@/stores/uiStore';
 import api from '@/lib/api';
 
@@ -20,7 +19,6 @@ interface SignupFormData {
 
 export function SignupForm() {
   const router = useRouter();
-  const { login } = useAuthStore();
   const { addToast } = useUIStore();
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -101,24 +99,40 @@ export function SignupForm() {
         password: formData.password,
       });
 
-      // Auto-login after registration
-      await login(formData.email, formData.password);
-      addToast({ type: 'success', message: 'Account created successfully!' });
-      router.push('/dashboard');
+      // Do NOT auto-login — email must be verified first (hard gate)
+      addToast({ type: 'success', message: 'Account created! Check your email to verify.' });
+      router.push(`/verify-email-sent?email=${encodeURIComponent(formData.email)}`);
     } catch (err: any) {
-      const detail = err?.response?.data?.detail || 'Registration failed. Please try again.';
-      if (detail.toLowerCase().includes('username')) {
-        setErrors({ username: detail });
-      } else if (detail.toLowerCase().includes('email')) {
-        setErrors({ email: detail });
-      } else {
-        setErrors({ general: detail });
+      const data = err?.response?.data;
+
+      // Structured error from backend: { field, message }
+      if (data?.detail && typeof data.detail === 'object' && data.detail.field && data.detail.message) {
+        setErrors(prev => ({ ...prev, [data.detail.field]: data.detail.message }));
+        addToast({ type: 'error', message: data.detail.message });
+        return;
       }
-      addToast({ type: 'error', message: detail });
+
+      // Pydantic 422 validation array: [{ loc, msg }]
+      if (Array.isArray(data?.detail)) {
+        data.detail.forEach((e: any) => {
+          const field = e.loc?.[e.loc.length - 1];
+          if (field) setErrors(prev => ({ ...prev, [field]: e.msg }));
+        });
+        addToast({ type: 'error', message: 'Please fix the errors below.' });
+        return;
+      }
+
+      // Fallback
+      const message = typeof data?.detail === 'string'
+        ? data.detail
+        : 'Registration failed. Please try again.';
+      setErrors(prev => ({ ...prev, general: message }));
+      addToast({ type: 'error', message });
     } finally {
       setIsLoading(false);
     }
   };
+
 
   const inputClass = (fieldName: string) =>
     `w-full bg-white/60 border rounded-button px-3.5 py-2.5 text-sm text-void placeholder:text-muted focus:outline-none focus:border-gold/50 transition-colors ${

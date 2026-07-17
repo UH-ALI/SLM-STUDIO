@@ -68,6 +68,9 @@ MAX_CACHED_COLLECTIONS = 5
 # Tier 2: Adapter registry — tracks which LoRA adapters are mounted on which base model
 ACTIVE_BASE_MODELS = OrderedDict()   # { base_model_slug: (model, tokenizer) }
 ACTIVE_ADAPTERS    = {}              # { job_id: base_model_slug }
+# base_slug -> job_id whose adapter is currently ACTIVE on that base model.
+# ACTIVE_ADAPTERS records what is MOUNTED; this records what is SELECTED.
+ACTIVE_ADAPTER_ON_BASE = {}          # { base_model_slug: job_id }
 ACTIVE_COLLECTIONS = OrderedDict()   # { project_id: collection }
 _cache_lock = threading.Lock()
 _embedder = None
@@ -156,7 +159,7 @@ def get_or_load_model(job_id: str):
     
     [P0.3] Also checks Redis gpu:state — waits if training is active.
     """
-    global ACTIVE_BASE_MODELS, ACTIVE_ADAPTERS
+    global ACTIVE_BASE_MODELS, ACTIVE_ADAPTERS, ACTIVE_ADAPTER_ON_BASE
 
     # [P0.3] Wait for GPU to be available (not training/draining)
     _wait_for_gpu_ready()
@@ -194,10 +197,11 @@ def get_or_load_model(job_id: str):
             )
             FastLanguageModel.for_inference(model)
             ACTIVE_BASE_MODELS[base_slug] = (model, tokenizer)
+            ACTIVE_ADAPTER_ON_BASE[base_slug] = job_id
             logger.info(f"  Base model cached. VRAM: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
 
         # --- Tier 2: LoRA Adapter Swap ---
-        if ACTIVE_ADAPTERS.get(job_id) != base_slug:
+        if ACTIVE_ADAPTER_ON_BASE.get(base_slug) != job_id:
             # This adapter is not yet the active one on this base model
             try:
                 # Try fast adapter swap (<50ms)
@@ -218,6 +222,7 @@ def get_or_load_model(job_id: str):
                         )
                         FastLanguageModel.for_inference(model)
                         ACTIVE_BASE_MODELS[base_slug] = (model, tokenizer)
+                        ACTIVE_ADAPTER_ON_BASE[base_slug] = job_id
                     else:
                         model.load_adapter(adapter_path, adapter_name=job_id)
                         model.set_adapter(job_id)
@@ -234,19 +239,24 @@ def get_or_load_model(job_id: str):
                     )
                     FastLanguageModel.for_inference(model)
                     ACTIVE_BASE_MODELS[base_slug] = (model, tokenizer)
+                    ACTIVE_ADAPTER_ON_BASE[base_slug] = job_id
 
             ACTIVE_ADAPTERS[job_id] = base_slug
+            ACTIVE_ADAPTER_ON_BASE[base_slug] = job_id
 
         return (model, tokenizer)
 
 
 # ─── MANUAL VRAM UNLOAD ─────────────────────────────────────────────────────
 def unload_model(job_id: str) -> bool:
-    global ACTIVE_BASE_MODELS, ACTIVE_ADAPTERS
+    global ACTIVE_BASE_MODELS, ACTIVE_ADAPTERS, ACTIVE_ADAPTER_ON_BASE
     with _cache_lock:
         base_slug = ACTIVE_ADAPTERS.pop(job_id, None)
         if base_slug is None:
             return False
+        # Clear active-adapter mark if this job was the selected one
+        if ACTIVE_ADAPTER_ON_BASE.get(base_slug) == job_id:
+            ACTIVE_ADAPTER_ON_BASE.pop(base_slug, None)
         # Only unload base model if no other adapters reference it
         remaining = [k for k, v in ACTIVE_ADAPTERS.items() if v == base_slug]
         if not remaining and base_slug in ACTIVE_BASE_MODELS:
@@ -258,11 +268,12 @@ def unload_model(job_id: str) -> bool:
 
 def free_all_memory() -> bool:
     """Forcefully drop ALL cached models from VRAM (used by Worker before training)."""
-    global ACTIVE_BASE_MODELS, ACTIVE_ADAPTERS
+    global ACTIVE_BASE_MODELS, ACTIVE_ADAPTERS, ACTIVE_ADAPTER_ON_BASE
     import gc
     with _cache_lock:
         ACTIVE_BASE_MODELS.clear()
         ACTIVE_ADAPTERS.clear()
+        ACTIVE_ADAPTER_ON_BASE.clear()
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

@@ -50,9 +50,38 @@ class UserResponse(UserBase):
     id: UUID
     full_name: str = Field(alias="fullName")
     is_active: bool = Field(alias="isActive")
+    is_email_verified: bool = Field(default=False, alias="isEmailVerified")
     created_at: datetime = Field(alias="createdAt")
 
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+
+# --- AUTH FLOW SCHEMAS (email verification & password reset) ---
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters long")
+        if not any(c.isupper() for c in v):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Password must contain at least one digit")
+        return v
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+class EmailActionResponse(BaseModel):
+    message: str
+
 
 # --- DATASET SCHEMAS ---
 # [PROJECT REFACTOR] CamelCase aliases for frontend compatibility
@@ -101,6 +130,9 @@ class ProjectResponse(BaseModel):
     base_model_name: Optional[str] = Field(default=None, alias="baseModelName")
     hyperparameters: Optional[Dict[str, Any]] = None
     inference_temperature: Optional[float] = Field(default=0.3, alias="inferenceTemperature")
+    # Sourced from Project.has_jobs — lets the UI tell a draft apart from a project
+    # whose training has been dispatched but not yet picked up by the worker.
+    has_jobs: bool = Field(default=False, alias="hasJobs")
     created_at: datetime = Field(alias="createdAt")
     updated_at: Optional[datetime] = Field(default=None, alias="updatedAt")
 

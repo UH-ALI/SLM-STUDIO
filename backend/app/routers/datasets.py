@@ -92,7 +92,8 @@ def upload_datasets(
     # PASS 2: every file passed — now create DB records and dispatch ingestion
     created_datasets = []
     for info in valid_files_info:
-        dataset_name = name or os.path.basename(info["file_location"])
+        # file_location is uuid-prefixed for uniqueness — not a display name.
+        dataset_name = name or info["filename"]
         new_dataset = create_dataset_record(
             db, dataset_name, info["file_location"], info["file_ext"], current_user.id
         )

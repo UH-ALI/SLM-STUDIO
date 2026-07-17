@@ -7,6 +7,7 @@ import { LogIn, Eye, EyeOff } from 'lucide-react';
 import { Button } from '@/components/atoms/Button';
 import { useAuthStore } from '@/stores/authStore';
 import { useUIStore } from '@/stores/uiStore';
+import api from '@/lib/api';
 
 interface LoginFormData {
   username: string;
@@ -19,13 +20,53 @@ export function LoginForm() {
   const { login } = useAuthStore();
   const { addToast } = useUIStore();
   const [isLoading, setIsLoading] = useState(false);
+  const [isResending, setIsResending] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [resendEmail, setResendEmail] = useState<string | null>(null);
   const [formData, setFormData] = useState<LoginFormData>({
     username: '',
     password: '',
     rememberMe: false,
   });
+
+  // Turns an axios failure into something the person reading it can act on.
+  const describeLoginError = (err: any): string => {
+    if (err?.code === 'ECONNABORTED') {
+      return 'The server took too long to respond. Please try again.';
+    }
+    if (!err?.response) {
+      return "Can't reach the server. Check that the API is running, then try again.";
+    }
+
+    const { status, data } = err.response;
+    const detail = data?.detail;
+
+    // Structured detail object (e.g. from 403 unverified gate)
+    if (detail && typeof detail === 'object') {
+      return detail.message || 'Sign in failed. Please try again.';
+    }
+
+    if (status === 401) return typeof detail === 'string' ? detail : 'Incorrect email/username or password.';
+    if (status === 400) return typeof detail === 'string' ? detail : 'This account cannot sign in right now.';
+    if (status === 422) return 'Please enter both your email/username and password.';
+    if (status >= 500) return 'The server hit an error while signing you in. Please try again.';
+    return typeof detail === 'string' ? detail : 'Sign in failed. Please try again.';
+  };
+
+  const handleResendVerification = async () => {
+    if (!resendEmail) return;
+    setIsResending(true);
+    try {
+      await api.post('/auth/resend-verification', { email: resendEmail });
+      addToast({ type: 'success', message: 'Verification email sent! Check your inbox.' });
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || 'Could not send email. Please try again.';
+      addToast({ type: 'error', message: typeof msg === 'string' ? msg : 'Please wait before requesting another email.' });
+    } finally {
+      setIsResending(false);
+    }
+  };
 
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};
@@ -48,17 +89,29 @@ export function LoginForm() {
     if (!validate()) return;
 
     setIsLoading(true);
+    setResendEmail(null);
     try {
       await login(formData.username, formData.password);
       addToast({ type: 'success', message: 'Welcome back!' });
       router.push('/dashboard');
-    } catch {
-      setErrors({ general: 'Invalid credentials. Please try again.' });
-      addToast({ type: 'error', message: 'Login failed. Check your credentials.' });
+    } catch (err: any) {
+      const data = err?.response?.data;
+
+      // Hard gate: unverified account — surface resend button
+      if (err?.response?.status === 403 && data?.detail?.action === 'resend_verification') {
+        setResendEmail(formData.username.includes('@') ? formData.username : '');
+        setErrors({ general: data.detail.message });
+        addToast({ type: 'error', message: data.detail.message });
+      } else {
+        const message = describeLoginError(err);
+        setErrors({ general: message });
+        addToast({ type: 'error', message });
+      }
     } finally {
       setIsLoading(false);
     }
   };
+
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
@@ -68,10 +121,20 @@ export function LoginForm() {
         <p className="text-sm text-muted">Sign in to your account</p>
       </div>
 
-      {/* General error */}
+      {/* General error + optional resend button */}
       {errors.general && (
         <div className="p-3 rounded-xl bg-rose/10 border border-rose/20 text-sm text-rose text-center">
-          {errors.general}
+          <p>{errors.general}</p>
+          {resendEmail !== null && (
+            <button
+              type="button"
+              onClick={handleResendVerification}
+              disabled={isResending}
+              className="mt-2 text-xs font-semibold underline text-rose/80 hover:text-rose disabled:opacity-50"
+            >
+              {isResending ? 'Sending…' : 'Resend verification email'}
+            </button>
+          )}
         </div>
       )}
 

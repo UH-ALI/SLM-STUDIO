@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
@@ -7,6 +9,18 @@ from sqlalchemy import text
 from app.database import get_db, engine, Base
 from app import models  # Required so SQLAlchemy knows about the tables
 from app.core.config import settings
+
+
+# Docker's healthcheck curls /health every 10s, which floods `docker compose up`
+# with a 200-OK access line each time and buries the log lines that matter.
+# Dropping just those lines from uvicorn's access log keeps the healthcheck
+# itself fully functional — only the noise goes.
+class _HealthCheckLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "GET /health " not in record.getMessage()
+
+
+logging.getLogger("uvicorn.access").addFilter(_HealthCheckLogFilter())
 
 # --- Import the routers ---
 from app.routers import users, datasets, inference, auth, projects  # [PROJECT REFACTOR] Added projects

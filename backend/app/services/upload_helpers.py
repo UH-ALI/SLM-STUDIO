@@ -9,6 +9,7 @@ there is exactly one implementation to maintain.
 import csv
 import os
 import shutil
+import uuid
 import zipfile
 from typing import Optional
 
@@ -53,7 +54,14 @@ def validate_file(file: UploadFile) -> tuple[str, str]:
                    f"Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}",
         )
 
-    file_location = os.path.join(UPLOAD_DIR, safe_filename)
+    # Store under a uuid-prefixed name. Keying storage on the bare filename made two
+    # uploads of "handbook.pdf" resolve to one path, so a second upload silently
+    # overwrote the first file — across projects and across users — and the dedup
+    # cleanup then deleted the original out from under the row that still referenced
+    # it. A unique path per upload makes that class of bug impossible; the original
+    # filename is preserved separately as Dataset.name for display.
+    unique_filename = f"{uuid.uuid4().hex}_{safe_filename}"
+    file_location = os.path.join(UPLOAD_DIR, unique_filename)
     return file_ext, file_location
 
 
