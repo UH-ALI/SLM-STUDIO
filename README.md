@@ -6,7 +6,7 @@ SLM Studio allows non-technical users to securely upload proprietary documents, 
 
 ---
 
-## 📖 Problem Statement
+## Problem Statement
 
 Small and Medium Enterprises (SMEs) face massive barriers when adopting enterprise AI platforms (like OpenAI GPT-4 or Google Gemini Pro):
 1. **Cost:** Subscription models and API token costs scale exponentially with usage.
@@ -17,17 +17,17 @@ Small and Medium Enterprises (SMEs) face massive barriers when adopting enterpri
 
 ---
 
-## ✨ Key Features
+## Key Features
 
-- 🚀 **No-Code Fine-Tuning:** Upload PDFs, DOCX, or TXT files. The system automatically extracts text, chunks it, generates synthetic Q&A pairs, and fine-tunes a LoRA adapter.
-- 🧠 **Zero-Compute Deduplication:** Smart document hashing prevents processing duplicates and enables instant vector-reuse across multiple projects.
-- 📚 **Robust RAG Pipeline:** A multi-reader PDF cascade ensures even difficult documents are parsed. ChromaDB vector search grounds all AI responses in your actual data.
-- 💻 **Widget Deployment:** Deploy your newly trained assistant directly to your website with a simple `<script>` embed tag.
-- 🔒 **100% Data Privacy:** Everything runs locally.
+- **No-Code Fine-Tuning:** Upload PDFs, DOCX, or TXT files. The system automatically extracts text, chunks it, generates synthetic Q&A pairs, and fine-tunes a LoRA adapter.
+- **Zero-Compute Deduplication:** Smart document hashing prevents processing duplicates and enables instant vector-reuse across multiple projects.
+- **Robust RAG Pipeline:** A multi-reader PDF cascade ensures even difficult documents are parsed. ChromaDB vector search grounds all AI responses in your actual data.
+- **Widget Deployment:** Deploy your newly trained assistant directly to your website with a simple `<script>` embed tag.
+- **100% Data Privacy:** Everything runs locally.
 
 ---
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 The system is designed around a microservices architecture orchestrated by Docker Compose.
 
@@ -78,7 +78,7 @@ graph TB
 
 ---
 
-## 🛠️ Technology Stack
+## Technology Stack
 
 | Category | Technology |
 |---|---|
@@ -138,6 +138,4 @@ graph TB
 
 ---
 
-## 📜 License
 
-[MIT License](LICENSE)
