@@ -1,0 +1,47 @@
+# ─── SECRETS ─────────────────────────────────────────────────────────────────
+.env
+.env.local
+*.env
+!.env.example
+# ─── DATA / MODEL ARTIFACTS ───────────────────────────────────────────────────
+data/raw/*
+data/processed/*
+data/vector_stores/*
+data/adapters/*
+!data/**/.gitkeep
+*.gguf
+
+# ─── AI SESSION TRANSCRIPTS & SCRATCH FILES ──────────────────────────────────
+# [CLEANUP — NEXT_STEPS.md #11] These are raw chat/session logs and one-off
+# scratch files, not project source — they bloat every zip/clone and have no
+# reason to ship. If you see one of these patterns show up again, it belongs
+# in your local notes, not the repo.
+continue from where you left*.md
+updated-chat-for-ai*.md
+test.html
+test-error.js
+*.session.md
+
+# ─── PYTHON ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# ─── NODE / NEXT.JS ─────────────────────────────────────────────────────────
+node_modules/
+.next/
+frontend/.next/
+
+# ─── DATA / MODEL ARTIFACTS ───────────────────────────────────────────────────
+backend/data/raw/*
+backend/data/processed/*
+backend/data/vector_stores/*
+backend/data/adapters/*
+!backend/data/**/.gitkeep
+*.gguf
+
+# ─── OS / EDITOR ──────────────────────────────────────────────────────────────
+.DS_Store
+.vscode/

@@ -1,0 +1,177 @@
+# Copy this file to requirements.txt inside your backend folder.
+# All framework versions are strictly preserved except the PyTorch/CUDA
+# training stack below, which was bumped to a mutually-compatible set
+# (see notes at the bottom of this file).
+
+python-jose[cryptography]==3.3.0
+
+# =============================================================================
+# NO-CODE SLM STUDIO — CORE DEPENDENCIES
+# =============================================================================
+
+# ─── CORE WEB FRAMEWORK (FastAPI Backend) ────────────────────────────────────
+fastapi==0.109.0
+uvicorn==0.27.0
+starlette==0.35.1
+pydantic==2.6.0
+pydantic-core==2.16.1
+pydantic-settings==2.2.1
+email-validator==2.3.0
+python-multipart==0.0.9
+
+# ─── ASYNC WORKERS & BACKGROUND TASK QUEUE (Celery + Redis + AMQP) ───────────
+celery==5.3.6
+redis==5.0.1
+kombu==5.6.2
+amqp==5.3.1
+vine==5.1.0
+billiard==4.2.4
+
+# ─── DATABASE ORM & MIGRATIONS (SQLAlchemy / PostgreSQL) ─────────────────────
+SQLAlchemy==2.0.25
+alembic==1.13.1
+psycopg2-binary==2.9.9
+greenlet==3.5.0
+Mako==1.3.11
+
+# ─── VECTOR STORE & RETRIEVAL (ChromaDB Stack) ────────────────────────────────
+chromadb==1.5.8
+hnswlib==0.8.0
+onnxruntime==1.25.1
+PyPika==0.51.1
+mmh3==5.2.1
+overrides==7.7.0
+
+# ─── DOCUMENT PARSING & RAG INGESTION (Phase 1 Markdown Pivot) ───────────────
+pdfplumber==0.11.2
+pymupdf4llm==1.27.2.3
+PyMuPDF==1.27.2.3
+pymupdf-layout==1.27.2.3
+pypdf==4.0.1
+python-docx==1.1.0
+werkzeug==3.0.3
+markitdown==0.1.1
+
+# ─── LLM API INTERACTION (Phase 2 Data Generation) ───────────────────────────
+groq==1.2.0
+google-genai==1.46.0
+google-auth==2.49.2
+
+# ─── DEEP LEARNING COMPUTE CORE (PyTorch Stack) ──────────────────────────────
+# Bumped from torch 2.4.0 -> 2.10.0 because unsloth==2026.4.8 /
+# unsloth_zoo==2026.4.9 both require torch<2.11.0,>=2.4.0, and the only
+# xformers release that installs cleanly without CUDA-extra gymnastics on
+# this axis is 0.0.34/0.0.35, both of which require torch>=2.10.
+torch==2.10.0
+torchvision==0.25.0
+torchao==0.17.0
+triton==3.6.0
+
+
+# =============================================================================
+# MODEL TRAINING & HuggingFace ECOSYSTEM (Phase 3 QLoRA)
+# =============================================================================
+
+# ─── UNSLOTH OPTIMIZATIONS ───────────────────────────────────────────────────
+unsloth==2026.4.8
+unsloth_zoo==2026.4.9
+# [PINNED — NEXT_STEPS.md #12] A teammate's branch pins xformers==0.0.35
+# against a slightly different CUDA wheel set. 0.0.34 is what's actually
+# verified working against this project's CUDA/driver combo (RTX 3090 Ti,
+# see docker-compose.yml's nvidia device reservation) — don't let a future
+# dependency-bump PR "fix" this back to 0.0.35 without first confirming the
+# target GPU's CUDA/driver version matches what 0.0.35's wheel was built for.
+xformers==0.0.34
+bitsandbytes==0.49.2
+cut-cross-entropy==25.1.1
+
+# ─── TRANSFORMERS & MODEL HUB MECHANICS ──────────────────────────────────────
+transformers==5.5.0
+tokenizers==0.22.2
+peft==0.19.1
+trl==0.23.0
+accelerate==1.13.0
+safetensors==0.7.0
+huggingface_hub==1.12.2
+hf_transfer==0.1.9
+hf-xet==1.4.3
+datasets==4.3.0
+
+
+# =============================================================================
+# SYSTEM WRAPPERS, MATHEMATICS & COMPREHENSIVE SUB-UTILITIES
+# =============================================================================
+
+# ─── DATA SCIENCE & ANALYTICS HELPER LIBRARIES ───────────────────────────────
+numpy==2.4.4
+pandas==3.0.2
+scipy==1.17.1
+scikit-learn==1.8.0
+sentence-transformers==5.4.1
+pyarrow==24.0.0
+
+# ─── ENVIRONMENT & NETWORKING PIPELINES ──────────────────────────────────────
+python-dotenv==1.0.1
+requests==2.33.1
+requests-oauthlib==2.0.0
+oauthlib==3.3.1
+urllib3==2.6.3
+httpcore==1.0.9
+httptools==0.7.1
+httpx==0.28.1
+h11==0.16.0
+yarl==1.23.0
+idna==3.13
+dnspython==2.8.0
+websocket-client==1.9.0
+websockets==15.0.1
+
+# ─── SYSTEM MATH, THREADING & PROTOCOLS ──────────────────────────────────────
+sympy==1.14.0
+mpmath==1.3.0
+networkx==3.6.1
+protobuf==6.33.6
+grpcio==1.80.0
+googleapis-common-protos==1.74.0
+filelock==3.29.0
+fsspec==2025.9.0
+psutil==7.2.2
+cffi==2.0.0
+pycparser==3.0
+bcrypt==4.0.1
+passlib==1.7.4
+cryptography==47.0.0
+
+# ─── TELEMETRY, MONITORING & LOGGING ─────────────────────────────────────────
+opentelemetry-api==1.41.1
+opentelemetry-sdk==1.41.1
+opentelemetry-proto==1.41.1
+opentelemetry-exporter-otlp-proto-common==1.41.1
+opentelemetry-exporter-otlp-proto-grpc==1.41.1
+opentelemetry-semantic-conventions==0.62b1
+
+# ─── SERIALIZATION & DATA DESERIALIZERS ──────────────────────────────────────
+orjson==3.11.8
+msgspec==0.21.1
+flatbuffers==25.12.19
+MarkupSafe==3.0.3
+Jinja2==3.1.6
+PyYAML==6.0.3
+
+# ─── TERMINAL DESIGNS & CLI UTILS ────────────────────────────────────────────
+click==8.3.3
+click-didyoumean==0.3.1
+click-plugins==1.1.1.2
+click-repl==0.3.0
+typer==0.25.0
+shellingham==1.5.4
+rich==15.0.0
+markdown-it-py==4.0.0
+mdurl==0.1.2
+Pygments==2.20.0
+prompt_toolkit==3.0.52
+tabulate==0.10.0
+tqdm==4.67.3
+
+# ─── LOW-LEVEL ACCELERATION UTILITIES ────────────────────────────────────────
+cuda-pathfinder==1.5.4

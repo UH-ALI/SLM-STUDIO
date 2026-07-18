@@ -1,0 +1,86 @@
+services:
+
+  # ─── API SERVER ──────────────────────────────────────────────────────────────
+  # FastAPI backend — handles HTTP requests from the Vercel frontend via the tunnel.
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: slm-studio-base:latest  # Naming the built image so the worker can reuse it
+    container_name: slm_api
+    restart: always
+    ports:
+      - "8000:8000"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    env_file:
+      - .env
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data  # 🚀 FIXED: Aligned directly to local data folder execution space
+      - ~/.cache/huggingface:/home/appuser/.cache/huggingface  # Persistent HuggingFace model cache
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 4096M       # 🔌 RESTORED: Back to your original host ceiling constraint
+          cpus: '3.0'         # Keeps CPU core utilization predictable
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # ─── CELERY WORKER ───────────────────────────────────────────────────────────
+  # Background task processor — handles RAG ingestion and fine-tuning workloads.
+  # Reuses the exact image built by the API service to prevent concurrent cache corruption.
+  worker:
+    image: slm-studio-base:latest  # References the image built by the api service above
+    container_name: slm_worker
+    restart: always
+    command: >
+      celery -A app.worker.tasks worker
+      --loglevel=info
+      --pool=solo
+      --concurrency=1
+      --prefetch-multiplier=1
+    env_file:
+      - .env
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data  # 🚀 FIXED: Shared exact same execution data space as the API
+      - ~/.cache/huggingface:/home/appuser/.cache/huggingface
+    depends_on:
+      api:
+        condition: service_healthy  # Ensures the image is fully built and running before starting
+    deploy:
+      resources:
+        limits:
+          memory: 4096M       # 🔌 RESTORED: Back to your original host ceiling constraint
+          cpus: '3.0'         # Prevents worker tasks from freezing the WSL environment
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # ─── NGROK TUNNEL SERVICE ──────────────────────────────────────────────────
+  ngrok-tunnel:
+    image: ngrok/ngrok:latest
+    container_name: slm_tunnel
+    restart: always
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    # Added --host-header=rewrite to handle HTTP/2 payload translation to Uvicorn
+    command: http api:8000 --host-header=rewrite --log=stdout
+    deploy:
+      resources:
+        limits:
+          memory: 256M        # Lightweight tunnel only needs minimal allocation
+    depends_on:
+      api:
+        condition: service_healthy

@@ -1,0 +1,50 @@
+name: CI
+
+# [FEATURE] Minimal compile/lint gate (NEXT_STEPS.md #9). Deliberately not a
+# full test suite — just enough to catch a broken import, a syntax error, or
+# a TypeScript type error before it reaches main, which is exactly the class
+# of bug this project has hit before (see the useJobs.ts fix in this repo's
+# history). Add real tests as a separate job later; this is the floor, not
+# the ceiling.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Byte-compile backend (catches syntax errors & bad imports)
+        run: |
+          python -m py_compile $(find backend/app -name "*.py" -not -path "*/unsloth_compiled_cache/*")
+
+  frontend-typecheck:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check (tsc --noEmit)
+        run: npx tsc --noEmit -p tsconfig.json
